@@ -1,18 +1,47 @@
 (() => {
   const page = document.querySelector('#storesPage');
-  const data = [
-    {id:'us-fashion',name:'US Fashion Store',country:'美国',currency:'USD',warehouses:['跨境仓'],sync:'同步正常',synced:'2026-09-11 10:30',health:'正常',note:'订单、商品与结算数据均已同步',orders:'12,486',products:'268',pending:'0',missing:'0',abnormal:'0',rate:'USD/CNY 7.1842'},
-    {id:'ph-lifestyle',name:'PH Lifestyle Store',country:'菲律宾',currency:'PHP',warehouses:['菲律宾本土'],sync:'同步正常',synced:'2026-09-11 10:28',health:'存在成本缺失',note:'12 个 SKU 缺少采购成本',orders:'8,906',products:'184',pending:'3',missing:'12',abnormal:'0',rate:'PHP/CNY 0.1241'},
-    {id:'id-trend',name:'ID Trend Store',country:'印尼',currency:'IDR',warehouses:['印尼本土','跨境仓'],sync:'同步延迟',synced:'2026-09-11 07:15',health:'数据延迟',note:'订单数据延迟超过 3 小时',orders:'6,321',products:'147',pending:'0',missing:'0',abnormal:'4',rate:'IDR/CNY 0.00044'},
-    {id:'vn-home',name:'VN Home Store',country:'越南',currency:'VND',warehouses:['越南亚达','越南904千易'],sync:'同步失败',synced:'2026-09-10 23:40',health:'同步失败',note:'请联系管理员检查店铺同步配置',orders:'9,210',products:'202',pending:'6',missing:'4',abnormal:'18',rate:'VND/CNY 0.00028'},
-    {id:'th-market',name:'TH Market Store',country:'泰国',currency:'THB',warehouses:['泰国本土'],sync:'同步正常',synced:'2026-09-11 10:31',health:'正常',note:'数据同步正常',orders:'10,882',products:'231',pending:'1',missing:'0',abnormal:'0',rate:'THB/CNY 0.2018'}
-  ];
-  const body=document.querySelector('#shopsBody'), country=document.querySelector('#shopCountryFilter'), sync=document.querySelector('#shopSyncFilter'), name=document.querySelector('#shopNameFilter'), detail=document.querySelector('#storeDetailDialog'), issue=document.querySelector('#syncIssueDialog');
-  const stateClass=s=>s==='同步失败'?'failed':s==='同步延迟'?'delayed':''; const healthClass=s=>s==='同步失败'?'danger':s==='正常'?'':'warning';
-  function render(){if(!body)return;const q=name.value.trim().toLowerCase(), list=data.filter(s=>(!country.value||s.country===country.value)&&(!sync.value||s.sync===sync.value)&&(!q||s.name.toLowerCase().includes(q)));document.querySelector('#shopsCount').textContent=`共 ${list.length} 个已授权店铺`;body.innerHTML=list.length?list.map(s=>`<tr><td>${s.name}</td><td>${s.country}</td><td>${s.currency}</td><td><div class="warehouse-tags">${s.warehouses.map(w=>`<span>${w}</span>`).join('')}</div></td><td><span class="shop-state ${stateClass(s.sync)}">${s.sync}</span></td><td>${s.synced}</td><td><span class="health-state ${healthClass(s.health)}">${s.health}</span></td><td><button class="shop-detail-button" data-detail="${s.id}">查看详情</button>${s.sync!=='同步正常'?`<button class="sync-issue-button" data-issue="${s.id}">提交问题</button>`:''}</td></tr>`).join(''):'<tr><td colspan="8" class="loading-row">没有符合条件的已授权店铺</td></tr>';}
-  function show(){document.querySelector('#dashboard')?.classList.add('is-hidden');document.querySelector('#currencyPage')?.classList.add('is-hidden');document.querySelector('#productsPage')?.classList.add('is-hidden');document.querySelector('#shippingPage')?.classList.add('is-hidden');document.querySelector('#ordersPage')?.classList.add('is-hidden');page.classList.remove('is-hidden');document.querySelector('#topbarTitle').textContent='我的店铺';document.querySelector('#reportCurrency').classList.add('is-hidden');document.querySelector('#topbarSubtitle').textContent='查看已授权店铺与数据健康状态';document.querySelector('#topbarSubtitle').classList.remove('is-hidden');document.querySelectorAll('.profit-nav a').forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#shops'));render();}
-  document.addEventListener('sales:navigate', event=>{if(event.detail?.route==='#shops')show();});document.querySelector('#shopSearch')?.addEventListener('click',render);document.querySelector('#shopReset')?.addEventListener('click',()=>{country.value='';sync.value='';name.value='';render();});name?.addEventListener('keydown',e=>{if(e.key==='Enter')render();});
-  function openIssue(s){document.querySelector('#syncIssueShop').textContent=`店铺：${s.name}（${s.country}）`;document.querySelector('#syncIssueContent').value='';document.querySelector('#syncIssueMessage').textContent='';issue.showModal();}
-  body?.addEventListener('click',e=>{const id=e.target.dataset.detail||e.target.dataset.issue;if(!id)return;const s=data.find(item=>item.id===id);if(e.target.dataset.issue)return openIssue(s);document.querySelector('#storeDetailContent').innerHTML=`<h2>${s.name}</h2><p>${s.country}站点 · 业务员只读信息</p><div class="store-detail-grid">${[['店铺 ID',s.id],['店铺币种',s.currency],['关联仓库',s.warehouses.join('、')],['数据接入状态',s.sync],['最近一次成功同步',s.synced],['数据健康度',s.health],['订单数据范围',s.orders+' 个订单'],['商品数量',s.products+' 个'],['待审核商品',s.pending+' 个'],['成本缺失数量',s.missing+' 个'],['异常订单数量',s.abnormal+' 个'],['当前结算汇率',s.rate]].map(x=>`<div><span>${x[0]}</span><strong>${x[1]}</strong></div>`).join('')}</div>${s.health==='正常'?'':`<div class="store-detail-alert">${s.note}</div>`}<div class="store-detail-actions">${s.sync==='同步正常'?'':`<button class="store-primary" id="detailIssue">提交同步问题</button>`}</div>`;detail.showModal();document.querySelector('#detailIssue')?.addEventListener('click',()=>{detail.close();openIssue(s);});});
-  document.querySelector('#closeStoreDetail')?.addEventListener('click',()=>detail.close());document.querySelector('#closeSyncIssue')?.addEventListener('click',()=>issue.close());document.querySelector('#submitSyncIssue')?.addEventListener('click',()=>{document.querySelector('#syncIssueMessage').textContent=document.querySelector('#syncIssueContent').value.trim()?'已提交给管理员处理。':'请填写问题说明后再提交。';});render();
+  const body = document.querySelector('#shopsBody');
+  const country = document.querySelector('#shopCountryFilter');
+  const sync = document.querySelector('#shopSyncFilter');
+  const name = document.querySelector('#shopNameFilter');
+  const detail = document.querySelector('#storeDetailDialog');
+  const codeName = { TH: '泰国', MY: '马来西亚', VN: '越南', PH: '菲律宾', ID: '印尼', US: '美国', CN: '中国' };
+  let shops = [];
+  const token = () => { try { return JSON.parse(localStorage.getItem('tiktokShopAuthSession') || sessionStorage.getItem('tiktokShopAuthSession') || '{}').accessToken; } catch { return null; } };
+  const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+  function siteName(value) { return codeName[value] || value || '—'; }
+  async function load() {
+    const response = await fetch('/api/business/shops', { headers: { Authorization: `Bearer ${token()}` } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || '无法读取店铺数据');
+    shops = data.shops || [];
+    const selected = country.value;
+    country.innerHTML = '<option value="">全部站点</option>' + [...new Set(shops.map(shop => shop.country_code))].sort().map(value => `<option value="${value}">${siteName(value)}</option>`).join('');
+    country.value = selected;
+  }
+  function render(error = '') {
+    if (!body) return;
+    const search = name.value.trim().toLowerCase();
+    const list = shops.filter(shop => (!country.value || shop.country_code === country.value) && (!sync.value || sync.value === '尚未接入') && (!search || `${shop.shop_name} ${shop.shop_code}`.toLowerCase().includes(search)));
+    document.querySelector('#shopsCount').textContent = `共 ${list.length} 个已授权店铺`;
+    body.innerHTML = error ? `<tr><td colspan="8" class="loading-row">${escapeHtml(error)}</td></tr>` : list.length ? list.map(shop => `<tr><td><strong>${escapeHtml(shop.shop_name)}</strong><br/><small>${escapeHtml(shop.shop_code)}</small></td><td>${siteName(shop.country_code)}</td><td>${escapeHtml(shop.currency_code)}</td><td><div class="warehouse-tags">${shop.warehouses.length ? shop.warehouses.map(warehouse => `<span>${escapeHtml(warehouse.name)}</span>`).join('') : '<span>暂未关联</span>'}</div></td><td><span class="shop-state delayed">尚未接入</span></td><td>—</td><td><span class="health-state warning">等待每日导入</span></td><td><button class="shop-detail-button" data-detail="${shop.id}">查看详情</button></td></tr>`).join('') : '<tr><td colspan="8" class="loading-row">没有符合条件的已授权店铺</td></tr>';
+  }
+  function show() {
+    ['#dashboard', '#currencyPage', '#productsPage', '#shippingPage', '#ordersPage', '#summaryPage'].forEach(selector => document.querySelector(selector)?.classList.add('is-hidden'));
+    page.classList.remove('is-hidden'); document.querySelector('#topbarTitle').textContent = '我的店铺'; document.querySelector('#reportCurrency').classList.add('is-hidden'); document.querySelector('#topbarSubtitle').textContent = '仅展示您已获授权店铺；订单与结算数据将通过每日导入更新'; document.querySelector('#topbarSubtitle').classList.remove('is-hidden');
+    document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#shops'));
+    load().then(() => render()).catch(error => render(error.message));
+  }
+  document.addEventListener('sales:navigate', event => { if (event.detail?.route === '#shops') show(); });
+  document.addEventListener('app:authenticated', event => { if (event.detail.role === 'business_user') load().catch(() => {}); });
+  document.querySelector('#shopSearch')?.addEventListener('click', () => render());
+  document.querySelector('#shopReset')?.addEventListener('click', () => { country.value = ''; sync.value = ''; name.value = ''; render(); });
+  name?.addEventListener('keydown', event => { if (event.key === 'Enter') render(); });
+  body?.addEventListener('click', event => {
+    const id = event.target.dataset.detail; if (!id) return;
+    const shop = shops.find(item => item.id === id); if (!shop) return;
+    document.querySelector('#storeDetailContent').innerHTML = `<h2>${escapeHtml(shop.shop_name)}</h2><p>${siteName(shop.country_code)}站点 · 业务员只读信息</p><div class="store-detail-grid">${[['店铺编码', shop.shop_code], ['店铺币种', shop.currency_code], ['关联仓库', shop.warehouses.map(item => item.name).join('、') || '暂未关联'], ['店铺状态', shop.is_active ? '启用' : '停用'], ['订单数据', '等待每日文件导入'], ['数据健康度', '尚未生成']].map(item => `<div><span>${item[0]}</span><strong>${escapeHtml(item[1])}</strong></div>`).join('')}</div><div class="store-detail-alert">店铺与仓库资料来自管理后台；订单、结算单和利润指标将在数据导入中心上线后显示。</div>`;
+    detail.showModal();
+  });
+  document.querySelector('#closeStoreDetail')?.addEventListener('click', () => detail.close());
 })();

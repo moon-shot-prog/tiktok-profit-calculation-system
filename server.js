@@ -157,18 +157,33 @@ function adminError(response, error) {
   if (error.message === 'FORBIDDEN') return sendJson(response, 403, { message: '只有管理员可以执行此操作' });
   return sendJson(response, 400, { message: error.message || '操作失败，请稍后重试' });
 }
+async function writeAudit(actorId, entityType, entityId, action, beforeData, afterData) {
+  const { error } = await adminClient.from('audit_logs').insert({
+    actor_id: actorId,
+    entity_type: entityType,
+    entity_id: entityId || null,
+    action,
+    before_data: beforeData || null,
+    after_data: afterData || null
+  });
+  if (error) console.error('Audit log write failed:', error.message);
+}
+function normaliseIds(values) {
+  return Array.isArray(values) ? [...new Set(values.filter(value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value)))] : [];
+}
 async function listAdminData(request, response) {
   try {
     await requireAdministrator(request);
-    const [{ data: shops, error: shopsError }, { data: warehouses, error: warehousesError }, { data: profiles, error: profilesError }, { data: roles, error: rolesError }, { data: permissions, error: permissionsError }, usersResult] = await Promise.all([
+    const [{ data: shops, error: shopsError }, { data: warehouses, error: warehousesError }, { data: shopWarehouses, error: shopWarehousesError }, { data: profiles, error: profilesError }, { data: roles, error: rolesError }, { data: permissions, error: permissionsError }, usersResult] = await Promise.all([
       adminClient.from('shops').select('id, shop_code, shop_name, country_code, currency_code, is_active, created_at').order('created_at'),
       adminClient.from('warehouses').select('id, name, country_code, is_active').order('name'),
+      adminClient.from('shop_warehouses').select('shop_id, warehouse_id'),
       adminClient.from('profiles').select('id, display_name, created_at'),
       adminClient.from('user_roles').select('user_id, role'),
       adminClient.from('user_shop_permissions').select('user_id, shop_id'),
       adminClient.auth.admin.listUsers({ page: 1, perPage: 200 })
     ]);
-    if (shopsError || warehousesError || profilesError || rolesError || permissionsError || usersResult.error) throw new Error('读取管理数据失败');
+    if (shopsError || warehousesError || shopWarehousesError || profilesError || rolesError || permissionsError || usersResult.error) throw new Error('读取管理数据失败');
     const profileById = new Map(profiles.map(profile => [profile.id, profile]));
     const users = usersResult.data.users.map(user => ({
       id: user.id,
@@ -178,12 +193,12 @@ async function listAdminData(request, response) {
       roles: roles.filter(row => row.user_id === user.id).map(row => row.role),
       shopIds: permissions.filter(row => row.user_id === user.id).map(row => row.shop_id)
     }));
-    sendJson(response, 200, { shops, warehouses, users });
+    sendJson(response, 200, { shops, warehouses, shopWarehouses, users });
   } catch (error) { adminError(response, error); }
 }
 async function createShop(request, response) {
   try {
-    await requireAdministrator(request);
+    const actor = await requireAdministrator(request);
     const body = await readJson(request);
     const shopCode = String(body.shopCode || '').trim();
     const shopName = String(body.shopName || '').trim();
@@ -192,7 +207,45 @@ async function createShop(request, response) {
     if (!/^[A-Za-z0-9_-]{2,50}$/.test(shopCode) || !shopName || !/^[A-Z]{2}$/.test(countryCode) || !/^[A-Z]{3}$/.test(currencyCode)) throw new Error('请完整填写店铺编码、名称、国家站点和币种');
     const { data, error } = await adminClient.from('shops').insert({ shop_code: shopCode, shop_name: shopName, country_code: countryCode, currency_code: currencyCode }).select().single();
     if (error) throw new Error(error.code === '23505' ? '该店铺编码已存在' : '新增店铺失败');
+    await writeAudit(actor.id, 'shop', data.id, 'create', null, data);
     sendJson(response, 201, { shop: data });
+  } catch (error) { adminError(response, error); }
+}
+async function updateShop(request, response) {
+  try {
+    const actor = await requireAdministrator(request);
+    const body = await readJson(request);
+    const shopId = String(body.shopId || '');
+    const warehouseIds = normaliseIds(body.warehouseIds);
+    const isActive = body.isActive !== false;
+    if (!/^[0-9a-f-]{36}$/i.test(shopId)) throw new Error('店铺参数无效');
+    const { data: before, error: findError } = await adminClient.from('shops').select('id, shop_name, is_active').eq('id', shopId).single();
+    if (findError || !before) throw new Error('未找到该店铺');
+    const { data: validWarehouses, error: warehouseError } = await adminClient.from('warehouses').select('id').in('id', warehouseIds.length ? warehouseIds : ['00000000-0000-0000-0000-000000000000']);
+    if (warehouseError || validWarehouses.length !== warehouseIds.length) throw new Error('存在无效仓库，请刷新后重试');
+    const { error: updateError } = await adminClient.from('shops').update({ is_active: isActive }).eq('id', shopId);
+    if (updateError) throw new Error('更新店铺状态失败');
+    const { error: deleteError } = await adminClient.from('shop_warehouses').delete().eq('shop_id', shopId);
+    if (deleteError) throw new Error('更新关联仓库失败');
+    if (warehouseIds.length) {
+      const { error: insertError } = await adminClient.from('shop_warehouses').insert(warehouseIds.map(warehouseId => ({ shop_id: shopId, warehouse_id: warehouseId })));
+      if (insertError) throw new Error('更新关联仓库失败');
+    }
+    await writeAudit(actor.id, 'shop', shopId, 'update_configuration', before, { isActive, warehouseIds });
+    sendJson(response, 200, { message: '店铺配置已保存' });
+  } catch (error) { adminError(response, error); }
+}
+async function createWarehouse(request, response) {
+  try {
+    const actor = await requireAdministrator(request);
+    const body = await readJson(request);
+    const name = String(body.name || '').trim();
+    const countryCode = String(body.countryCode || '').trim().toUpperCase() || null;
+    if (!name || name.length > 80 || (countryCode && !/^[A-Z]{2}$/.test(countryCode))) throw new Error('请填写有效的仓库名称和国家站点');
+    const { data, error } = await adminClient.from('warehouses').insert({ name, country_code: countryCode }).select().single();
+    if (error) throw new Error(error.code === '23505' ? '该仓库名称已存在' : '新增仓库失败');
+    await writeAudit(actor.id, 'warehouse', data.id, 'create', null, data);
+    sendJson(response, 201, { warehouse: data });
   } catch (error) { adminError(response, error); }
 }
 async function createMember(request, response) {
@@ -202,10 +255,14 @@ async function createMember(request, response) {
     const email = String(body.email || '').trim();
     const password = String(body.password || '');
     const role = String(body.role || 'business_user');
-    const shopIds = Array.isArray(body.shopIds) ? body.shopIds.filter(value => typeof value === 'string') : [];
+    const shopIds = normaliseIds(body.shopIds);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('请输入有效的成员邮箱');
     if (password.length < 8) throw new Error('初始密码至少需要 8 位');
     if (!['business_user', 'finance', 'admin'].includes(role)) throw new Error('角色无效');
+    if (shopIds.length) {
+      const { data: validShops, error: shopsError } = await adminClient.from('shops').select('id').in('id', shopIds);
+      if (shopsError || validShops.length !== shopIds.length) throw new Error('存在无效店铺，请刷新后重试');
+    }
     const { data, error } = await adminClient.auth.admin.createUser({ email, password, email_confirm: true });
     if (error || !data.user) throw new Error(error?.message?.includes('already') ? '该邮箱已存在' : '创建成员失败');
     const userId = data.user.id;
@@ -214,6 +271,7 @@ async function createMember(request, response) {
       shopIds.length ? adminClient.from('user_shop_permissions').insert(shopIds.map(shopId => ({ user_id: userId, shop_id: shopId }))) : Promise.resolve({ error: null })
     ]);
     if (roleError || permissionResult.error) throw new Error('账号已创建，但授权保存失败，请在成员列表重新设置授权');
+    await writeAudit(actor.id, 'member', userId, 'create', null, { email, role, shopIds });
     sendJson(response, 201, { message: '成员账号已创建，可以使用初始密码登录' });
   } catch (error) { adminError(response, error); }
 }
@@ -223,9 +281,13 @@ async function updateMemberAccess(request, response) {
     const body = await readJson(request);
     const userId = String(body.userId || '');
     const role = String(body.role || '');
-    const shopIds = Array.isArray(body.shopIds) ? [...new Set(body.shopIds.filter(value => typeof value === 'string'))] : [];
+    const shopIds = normaliseIds(body.shopIds);
     if (!userId || !['business_user', 'finance', 'admin', 'super_admin'].includes(role)) throw new Error('授权参数无效');
     if (userId === actor.id && role !== 'super_admin') throw new Error('不能降低当前超级管理员自身权限');
+    if (shopIds.length) {
+      const { data: validShops, error: shopsError } = await adminClient.from('shops').select('id').in('id', shopIds);
+      if (shopsError || validShops.length !== shopIds.length) throw new Error('存在无效店铺，请刷新后重试');
+    }
     const { error: deleteRolesError } = await adminClient.from('user_roles').delete().eq('user_id', userId);
     if (deleteRolesError) throw new Error('更新角色失败');
     const { error: insertRoleError } = await adminClient.from('user_roles').insert({ user_id: userId, role, assigned_by: actor.id });
@@ -236,7 +298,34 @@ async function updateMemberAccess(request, response) {
       const { error: insertPermissionsError } = await adminClient.from('user_shop_permissions').insert(shopIds.map(shopId => ({ user_id: userId, shop_id: shopId, granted_by: actor.id })));
       if (insertPermissionsError) throw new Error('更新店铺授权失败');
     }
+    await writeAudit(actor.id, 'member', userId, 'update_access', null, { role, shopIds });
     sendJson(response, 200, { message: '成员权限已更新' });
+  } catch (error) { adminError(response, error); }
+}
+async function listBusinessShops(request, response) {
+  try {
+    const accessToken = bearerToken(request);
+    const identity = await getAuthenticatedProfile(accessToken);
+    const userId = identity.profile.id;
+    const isPrivileged = identity.roles.some(role => ['finance', 'admin', 'super_admin'].includes(role));
+    const permissionQuery = adminClient.from('user_shop_permissions').select('shop_id').eq('user_id', userId);
+    const { data: permissions, error: permissionsError } = await permissionQuery;
+    if (permissionsError) throw new Error('读取店铺授权失败');
+    const shopIds = permissions.map(row => row.shop_id);
+    let query = adminClient.from('shops').select('id, shop_code, shop_name, country_code, currency_code, timezone, is_active, updated_at').order('shop_name');
+    if (!isPrivileged) query = shopIds.length ? query.in('id', shopIds) : query.in('id', ['00000000-0000-0000-0000-000000000000']);
+    const { data: shops, error: shopsError } = await query;
+    if (shopsError) throw new Error('读取店铺数据失败');
+    const visibleShopIds = shops.map(shop => shop.id);
+    const { data: links, error: linksError } = await adminClient.from('shop_warehouses').select('shop_id, warehouses(id, name, country_code, is_active)').in('shop_id', visibleShopIds.length ? visibleShopIds : ['00000000-0000-0000-0000-000000000000']);
+    if (linksError) throw new Error('读取关联仓库失败');
+    const warehousesByShop = new Map();
+    links.forEach(link => {
+      const rows = warehousesByShop.get(link.shop_id) || [];
+      if (link.warehouses?.is_active) rows.push(link.warehouses);
+      warehousesByShop.set(link.shop_id, rows);
+    });
+    sendJson(response, 200, { shops: shops.map(shop => ({ ...shop, warehouses: warehousesByShop.get(shop.id) || [] })) });
   } catch (error) { adminError(response, error); }
 }
 async function deletePendingMember(request, response) {
@@ -266,9 +355,12 @@ http.createServer(async (request, response) => {
   if (url.pathname === '/api/auth/session' && request.method === 'POST') return handleSession(request, response);
   if (url.pathname === '/api/admin/data' && request.method === 'GET') return listAdminData(request, response);
   if (url.pathname === '/api/admin/shops' && request.method === 'POST') return createShop(request, response);
+  if (url.pathname === '/api/admin/shops/configuration' && request.method === 'PUT') return updateShop(request, response);
+  if (url.pathname === '/api/admin/warehouses' && request.method === 'POST') return createWarehouse(request, response);
   if (url.pathname === '/api/admin/members' && request.method === 'POST') return createMember(request, response);
   if (url.pathname === '/api/admin/members/access' && request.method === 'PUT') return updateMemberAccess(request, response);
   if (url.pathname === '/api/admin/members/pending' && request.method === 'DELETE') return deletePendingMember(request, response);
+  if (url.pathname === '/api/business/shops' && request.method === 'GET') return listBusinessShops(request, response);
   if (url.pathname === '/api/health' && request.method === 'GET') return sendJson(response, 200, { status: 'ok', supabaseConfigured: Boolean(authClient && adminClient) });
   if (url.pathname === '/api/reference-rates') {
     const quote = url.searchParams.get('currency') || 'CNY';
