@@ -305,6 +305,7 @@ async function updateMemberAccess(request, response) {
 async function listBusinessShops(request, response) {
   try {
     const accessToken = bearerToken(request);
+    if (!accessToken) throw new Error('UNAUTHORIZED');
     const identity = await getAuthenticatedProfile(accessToken);
     const userId = identity.profile.id;
     const isPrivileged = identity.roles.some(role => ['finance', 'admin', 'super_admin'].includes(role));
