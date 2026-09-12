@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 
-if (typeof process.loadEnvFile === 'function') process.loadEnvFile(path.join(__dirname, '.env'));
+const localEnvPath = path.join(__dirname, '.env');
+if (typeof process.loadEnvFile === 'function' && fs.existsSync(localEnvPath)) process.loadEnvFile(localEnvPath);
 
 const PORT = process.env.PORT || 3000;
 const REFRESH_INTERVAL = 3 * 60 * 60 * 1000;
