@@ -1,0 +1,1 @@
+.settlement-group{margin-top:20px}.settlement-group h3{font-size:14px;margin:0 0 8px;color:#2e4658}.settlement-group .settlement-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.settlement-group .settlement-detail-grid div{background:#f6f9fb}@media(max-width:560px){.settlement-group .settlement-detail-grid{grid-template-columns:1fr}}

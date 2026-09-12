@@ -1,0 +1,31 @@
+/* 汇总和店铺页面与其它业务页面共用内容区域，避免独立固定覆盖层。 */
+.summary-page,
+.stores-page {
+  position: relative;
+  z-index: auto;
+  inset: auto;
+  min-height: calc(100vh - 72px);
+  overflow: visible;
+  background: #f6f8fc;
+  padding: 30px 34px 48px;
+  margin: 0 auto;
+  max-width: 1500px;
+}
+
+.summary-filters,
+.stores-filter-bar {
+  top: 72px;
+}
+
+@media (max-width: 760px) {
+  .summary-page,
+  .stores-page {
+    min-height: calc(100vh - 62px);
+    padding: 18px 14px;
+  }
+
+  .summary-filters,
+  .stores-filter-bar {
+    top: 62px;
+  }
+}

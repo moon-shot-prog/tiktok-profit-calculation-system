@@ -1,0 +1,19 @@
+{
+  "name": "tiktok-profit-calculation-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TikTok Shop multi-store profit calculation system",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.116.0"
+  },
+  "devDependencies": {
+    "supabase": "2.107.0"
+  }
+}

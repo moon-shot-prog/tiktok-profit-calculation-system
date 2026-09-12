@@ -1,0 +1,1 @@
+.profit-nav a#shippingExpand{position:relative}.shipping-arrow{margin-left:auto;font-size:12px;transition:transform .2s}.profit-nav a#shippingExpand[aria-expanded="false"] .shipping-arrow{transform:rotate(180deg)}

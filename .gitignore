@@ -1,0 +1,12 @@
+# Local credentials and environment configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and runtime output
+node_modules/
+npm-debug.log*
+*.log
+
+# Supabase CLI machine-specific connection cache
+supabase/.temp/
