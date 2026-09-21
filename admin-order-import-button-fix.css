@@ -1,0 +1,15 @@
+.order-import-panel form > button {
+  align-self: start;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 14px;
+  line-height: 18px;
+}
+
+.product-admin-dialog form > button {
+  align-self: start;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 14px;
+  line-height: 18px;
+}

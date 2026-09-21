@@ -1,0 +1,10 @@
+.shop-admin-action.danger { color: #c55c4f; }
+.shop-empty-link { color: #9aa7b5; font-size: 11px; }
+.shop-admin-live-note { margin: 12px 0 0; padding: 9px 12px; border-radius: 7px; background: #eef8fc; color: #34718d; font-size: 12px; }
+.shop-admin-dialog .shop-form-wide { grid-column: 1 / -1; }
+.shop-admin-dialog small { color: #8291a2; font-size: 10px; }
+.shop-save-message { grid-column: 1 / -1; margin: 0 !important; color: #bf5c51 !important; min-height: 18px; }
+.shop-dialog-actions { display: flex; gap: 9px; margin-top: 18px; }
+.shop-dialog-actions .secondary { background: #fff; border: 1px solid #dce5ed; color: #65768a; }
+.shop-dialog-actions .danger-button { background: #c75c4f; }
+.shop-detail-grid strong { overflow-wrap: anywhere; }

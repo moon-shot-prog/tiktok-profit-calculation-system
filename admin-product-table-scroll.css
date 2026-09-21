@@ -1,0 +1,41 @@
+#adminManagement.product-management-active {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: calc(100vh - 150px);
+  min-height: 400px;
+  overflow: hidden;
+}
+
+#adminManagement.product-management-active .product-admin-filters,
+#adminManagement.product-management-active .product-admin-toolbar,
+#adminManagement.product-management-active .admin-pagination,
+#adminManagement.product-management-active .feedback-demo-note {
+  flex: 0 0 auto;
+}
+
+#adminManagement.product-management-active .product-admin-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+}
+
+#adminManagement.product-management-active .product-admin-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+#adminManagement.product-management-active .admin-pagination {
+  margin-top: 12px;
+}
+
+#adminManagement.product-management-active .feedback-demo-note {
+  margin: 10px 0 0;
+}
+
+@media (max-width: 760px) {
+  #adminManagement.product-management-active { height: calc(100vh - 118px); }
+}

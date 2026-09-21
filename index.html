@@ -8,6 +8,41 @@
     <link rel="stylesheet" href="form.css" />
     <link rel="stylesheet" href="auth.css" />
     <link rel="stylesheet" href="business.css" />
+    <link rel="stylesheet" href="business-dashboard-filter.css" />
+    <link rel="stylesheet" href="dashboard-alerts.css" />
+    <link rel="stylesheet" href="refund-trend.css" />
+    <link rel="stylesheet" href="business-rates-live.css" />
+    <link rel="stylesheet" href="admin-pagination.css" />
+    <link rel="stylesheet" href="admin-audit.css" />
+    <link rel="stylesheet" href="admin-users.css" />
+    <link rel="stylesheet" href="admin-member-form.css" />
+    <link rel="stylesheet" href="admin-member-form-overrides.css" />
+    <link rel="stylesheet" href="admin-user-role-real.css" />
+    <link rel="stylesheet" href="admin-member-details.css" />
+    <link rel="stylesheet" href="admin-user-role-live.css" />
+    <link rel="stylesheet" href="admin-warehouse.css" />
+    <link rel="stylesheet" href="admin-warehouse-live.css?v=20260921-2" />
+    <link rel="stylesheet" href="admin-warehouse-multiselect.css" />
+    <link rel="stylesheet" href="admin-warehouse-new-form.css" />
+    <link rel="stylesheet" href="admin-warehouse-original-picker.css" />
+    <link rel="stylesheet" href="super-workspace-switch.css" />
+    <link rel="stylesheet" href="admin-shop.css" />
+    <link rel="stylesheet" href="admin-shop-live.css" />
+    <link rel="stylesheet" href="admin-shop-form.css" />
+    <link rel="stylesheet" href="admin-rates.css" />
+    <link rel="stylesheet" href="admin-rates-live.css" />
+    <link rel="stylesheet" href="admin-products.css" />
+    <link rel="stylesheet" href="admin-product-import-template.css" />
+    <link rel="stylesheet" href="admin-product-import.css" />
+    <link rel="stylesheet" href="admin-product-table-scroll.css" />
+    <link rel="stylesheet" href="business-order-details-live.css" />
+    <link rel="stylesheet" href="business-settlement-live.css" />
+    <link rel="stylesheet" href="admin-products-live.css" />
+    <link rel="stylesheet" href="admin-orders.css" />
+    <link rel="stylesheet" href="admin-order-import-button-fix.css" />
+    <link rel="stylesheet" href="admin-order-import-ui.css" />
+    <link rel="stylesheet" href="admin-profit.css" />
+    <link rel="stylesheet" href="admin-overview.css" />
     <link rel="stylesheet" href="admin.css" />
   </head>
   <body>
@@ -40,19 +75,18 @@
       </section>
     </main>
 
-    <section class="workspace is-hidden" id="adminWorkspace" aria-live="polite">
-      <aside class="sidebar">
-        <div class="sidebar-brand">智慧<span>管家</span></div>
-        <p class="role-badge">管理员工作区</p>
-        <nav><a class="active" href="#overview">工作概览</a><a href="#users">用户与角色</a><a href="#settings">系统设置</a></nav>
-        <button class="logout">退出登录</button>
+    <section class="workspace admin-console is-hidden" id="adminWorkspace" aria-live="polite">
+      <aside class="sidebar admin-sidebar">
+        <div class="admin-profile"><span class="admin-avatar">管</span><div><strong>陈管理员</strong><small>超级管理员</small></div></div>
+        <div class="super-workspace-switch is-hidden" id="superWorkspaceSwitch"><button type="button" id="enterBusinessWorkspace">进入业务模块</button><button type="button" id="enterAdminWorkspace">进入后台管理</button></div>
+        <nav class="admin-nav" aria-label="后台管理导航">
+          <section><button class="admin-nav-group" type="button" aria-expanded="true">经营监控 <b>⌃</b></button><div class="admin-nav-children"><button class="active" data-admin-page="overview">工作概览</button><button data-admin-page="profit">利润监控</button><button data-admin-page="orders">订单与结算</button></div></section>
+          <section><button class="admin-nav-group" type="button" aria-expanded="true">基础资料 <b>⌃</b></button><div class="admin-nav-children"><button data-admin-page="products">商品管理</button><button data-admin-page="rates">汇率管理</button><button data-admin-page="warehouses">仓库管理</button><button data-admin-page="shops">店铺管理</button></div></section>
+          <section><button class="admin-nav-group" type="button" aria-expanded="true">系统管理 <b>⌃</b></button><div class="admin-nav-children"><button data-admin-page="users">用户与角色</button><button data-admin-page="logs">操作记录</button><button data-admin-page="feedback">反馈问题处理</button></div></section>
+        </nav>
+        <button class="logout admin-logout">退出登录</button>
       </aside>
-      <div class="workspace-content">
-        <header><div><p class="eyebrow">ADMIN CONSOLE</p><h2 id="adminSuccess">管理员跳转成功</h2></div><span class="avatar">管</span></header>
-        <div class="notice">已根据管理员权限进入系统管理工作区。</div>
-        <div id="adminManagement" class="admin-management"></div>
-        <div class="metrics"><article><span>今日访问</span><strong>1,286</strong><small>较昨日 +12%</small></article><article><span>待处理事项</span><strong>18</strong><small>需要优先关注</small></article><article><span>在线业务员</span><strong>36</strong><small>当前活跃用户</small></article></div><div class="invite-panel"><div><strong>成员邀请</strong><p>请使用下方“成员与店铺授权”区域发送真实邀请邮件。</p></div><button type="button" id="inviteMember" disabled>请在下方操作</button></div>
-      </div>
+      <main class="workspace-content admin-content"><header class="admin-topbar"><div><p class="eyebrow">ADMIN CONSOLE</p><h2 id="adminSuccess">管理员跳转成功</h2></div><span class="admin-stage">视觉演示模式 · 未连接数据</span></header><div id="adminManagement" class="admin-management"></div></main>
     </section>
 
     <section class="sales-app is-hidden" id="salesWorkspace" aria-live="polite">
@@ -67,6 +101,7 @@
       <div class="profit-main">
         <header class="profit-topbar">
           <div class="topbar-brand"><div class="mobile-title" id="topbarTitle">TikTok Profit</div><small class="topbar-subtitle is-hidden" id="topbarSubtitle">统一管理实时参考与报表结算汇率</small></div>
+          <div class="super-view-badge is-hidden" id="superViewBadge"><span>超级管理员视角 · 全部店铺</span><button type="button" id="returnAdminWorkspace">进入后台管理</button></div>
           <div class="top-actions">
             <label class="report-currency is-hidden" id="reportCurrency">汇率货币：<select id="quoteCurrency" aria-label="汇率货币"><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
             <div class="notification-wrap"><button id="notificationButton" class="icon-button notification-button" type="button" aria-label="通知中心">♧<i></i></button><div class="notification-panel is-hidden" id="notificationPanel"><div class="panel-head"><strong>通知中心</strong><button type="button" id="markRead">全部已读</button></div><a href="#sync"><span class="dot red"></span><div><b>数据同步失败</b><p>US Shop 的订单数据同步中断</p><small>10 分钟前</small></div></a><a href="#products"><span class="dot amber"></span><div><b>成本缺失</b><p>12 个 SKU 尚未维护采购成本</p><small>1 小时前</small></div></a><a href="#summary"><span class="dot purple"></span><div><b>利润异常</b><p>3 个商品净利率低于设定阈值</p><small>今天 09:20</small></div></a><a href="#notice"><span class="dot blue"></span><div><b>系统更新</b><p>利润报表筛选功能已优化</p><small>昨天</small></div></a><a href="#notice"><span class="dot blue"></span><div><b>管理员公告</b><p>请于本周完成月度利润核对</p><small>昨天</small></div></a></div></div>
@@ -74,10 +109,10 @@
           </div>
         </header>
         <main class="dashboard-content" id="dashboard">
-          <div class="page-heading"><div><p class="eyebrow">PROFIT OVERVIEW</p><h1>数据看板</h1><p>查看已授权店铺的经营表现与待处理事项</p></div><button class="refresh-button" type="button">↻&nbsp; 更新数据</button></div>
-          <section class="profit-kpis" aria-label="核心利润指标"><article><span>销售额（GMV）</span><strong>$128,640.28</strong><small class="up">↑ 12.6% <em>较上期</em></small></article><article><span>有效订单</span><strong>2,486</strong><small class="up">↑ 8.4% <em>较上期</em></small></article><article><span>总成本</span><strong>$92,719.44</strong><small><em>含退款与平台费用</em></small></article><article class="profit-card"><span>净利润</span><strong>$35,920.84</strong><small class="up">↑ 16.2% <em>净利率 27.93%</em></small></article></section>
+          <div class="page-heading dashboard-heading"><div><p class="eyebrow">PROFIT OVERVIEW</p><h1>数据看板</h1><p id="dashboardScopeText">查看已授权店铺近 7 天的经营表现与待处理事项</p></div><form class="dashboard-filters" id="dashboardFilters"><label>店铺<select id="dashboardShopFilter"><option value="">全部已授权店铺</option></select></label><label>时间范围<select id="dashboardRangeFilter"><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="month">本月</option><option value="custom">自定义</option><option value="day">每日自选</option></select></label><div class="dashboard-date-controls is-hidden" id="dashboardDateControls"><label id="dashboardStartLabel">开始日期<input id="dashboardStartDate" type="date" aria-label="开始日期" /></label><span id="dashboardDateDivider">至</span><label id="dashboardEndLabel">结束日期<input id="dashboardEndDate" type="date" aria-label="结束日期" /></label></div><label>报表币种<select id="dashboardCurrencyFilter"><option value="CNY">CNY</option><option value="USD" selected>USD</option></select></label><label>汇率取值<select id="dashboardRateTypeFilter"><option value="settlement">报表结算汇率</option><option value="reference">实时参考汇率</option></select></label><div class="dashboard-filter-actions"><button class="dashboard-query" type="submit">查询</button><button class="dashboard-reset" type="button" id="dashboardFilterReset">重置</button></div></form></div>
+          <section class="profit-kpis" aria-label="核心利润指标"><article><span>销售额（GMV）</span><strong id="dashboardGmv">¥—</strong><small id="dashboardGmvNote"><em>按报表结算汇率换算</em></small></article><article><span>有效订单</span><strong id="dashboardValidOrders">—</strong><small id="dashboardValidOrdersNote"><em>按销售额取值订单去重</em></small></article><article><span>结算/预计金额</span><strong id="dashboardSettlementAmount">¥—</strong><small id="dashboardSettlementNote"><em>优先已结算账单</em></small></article><article class="profit-card"><span>签收率</span><strong id="dashboardSignedRate">—</strong><small id="dashboardSignedRateNote"><em>已签收 / 有效订单</em></small></article></section>
           <section class="dashboard-grid"><article class="chart-card trend-card"><div class="card-heading"><div><h2>利润趋势</h2><p>销售额与净利润（USD）</p></div><button class="period-tabs" type="button">按日 ⌄</button></div><div class="chart-legend"><span><i class="sales-line"></i>销售额</span><span><i class="profit-line"></i>净利润</span></div><div class="line-chart" aria-label="利润趋势图"><div class="chart-y"><span>20k</span><span>15k</span><span>10k</span><span>5k</span><span>0</span></div><div class="chart-area"><svg viewBox="0 0 640 205" preserveAspectRatio="none" role="img"><defs><linearGradient id="areaGradient" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#7cd8ef" stop-opacity=".35"/><stop offset="1" stop-color="#7cd8ef" stop-opacity="0"/></linearGradient></defs><path d="M0 148 L70 135 L140 149 L210 93 L280 114 L350 74 L420 94 L490 45 L560 61 L640 18 L640 205 L0 205Z" fill="url(#areaGradient)"/><path d="M0 148 L70 135 L140 149 L210 93 L280 114 L350 74 L420 94 L490 45 L560 61 L640 18" fill="none" stroke="#199dc3" stroke-width="3"/><path d="M0 181 L70 169 L140 177 L210 145 L280 153 L350 129 L420 142 L490 108 L560 118 L640 81" fill="none" stroke="#35bc8d" stroke-width="3" stroke-dasharray="0"/></svg><div class="chart-x"><span>9/01</span><span>9/03</span><span>9/05</span><span>9/07</span><span>9/09</span><span>9/10</span></div></div></div></article><article class="todo-card"><div class="card-heading"><div><h2>待处理事项</h2><p>请优先处理影响利润数据的问题</p></div><a href="#all">查看全部</a></div><div class="todo-list"><a href="#sync"><span class="todo-icon red-bg">!</span><div><b>店铺数据同步失败</b><p>US Shop · 最近同步于 10 分钟前</p></div><span>›</span></a><a href="#products"><span class="todo-icon amber-bg">!</span><div><b>商品成本待补充</b><p>12 个 SKU 缺少采购成本</p></div><span>›</span></a><a href="#summary"><span class="todo-icon purple-bg">↓</span><div><b>低利润商品预警</b><p>3 个商品净利率低于 10%</p></div><span>›</span></a></div></article></section>
-          <section class="dashboard-grid lower-grid"><article class="table-card"><div class="card-heading"><div><h2>店铺利润排行</h2><p>按净利润排序</p></div><a href="#summary">查看利润汇总</a></div><table><thead><tr><th>店铺 / 站点</th><th>销售额</th><th>净利润</th><th>净利率</th></tr></thead><tbody><tr><td><span class="shop-badge us">US</span> US Fashion Store</td><td>$52,468.80</td><td class="positive">$16,281.62</td><td>31.03%</td></tr><tr><td><span class="shop-badge uk">UK</span> UK Lifestyle Store</td><td>$38,916.42</td><td class="positive">$10,057.18</td><td>25.84%</td></tr><tr><td><span class="shop-badge de">DE</span> DE Trend Store</td><td>$37,255.06</td><td class="positive">$9,582.04</td><td>25.72%</td></tr></tbody></table></article><article class="rates-card"><div class="card-heading"><div><h2>汇率快览</h2><p>报表结算汇率用于利润计算</p></div><a href="#currency">汇率中心</a></div><div class="rate-row"><span>USD / CNY</span><strong>7.1842</strong><small>结算汇率 · 生效于 09/10</small></div><div class="rate-row"><span>GBP / USD</span><strong>1.2864</strong><small>结算汇率 · 生效于 09/10</small></div><div class="rate-row"><span>EUR / USD</span><strong>1.0927</strong><small>结算汇率 · 生效于 09/10</small></div><p class="rate-explainer">实时参考汇率提供来源与更新时间；已结算的历史订单不会受实时汇率变动影响。</p></article></section>
+          <section class="dashboard-grid lower-grid"><article class="table-card"><div class="card-heading"><div><h2>店铺利润排行</h2><p>按净利润排序</p></div><a href="#summary">查看利润汇总</a></div><table><thead><tr><th>店铺 / 站点</th><th>销售额</th><th>净利润</th><th>净利率</th></tr></thead><tbody><tr><td><span class="shop-badge us">US</span> US Fashion Store</td><td>$52,468.80</td><td class="positive">$16,281.62</td><td>31.03%</td></tr><tr><td><span class="shop-badge uk">UK</span> UK Lifestyle Store</td><td>$38,916.42</td><td class="positive">$10,057.18</td><td>25.84%</td></tr><tr><td><span class="shop-badge de">DE</span> DE Trend Store</td><td>$37,255.06</td><td class="positive">$9,582.04</td><td>25.72%</td></tr></tbody></table></article><article class="rates-card"><div class="card-heading"><div><h2>汇率快览</h2><p id="dashboardRatesMeta">正在读取当前汇率…</p></div><a href="#currency">汇率中心</a></div><div id="dashboardRatesBody"><div class="rate-row"><span>汇率数据</span><strong>—</strong><small>登录后读取</small></div></div><p class="rate-explainer" id="dashboardRatesExplainer">实时参考汇率仅供参考；报表结算汇率用于订单金额换算。</p></article></section>
         </main>
         <main class="exchange-page is-hidden" id="currencyPage">
           <div class="exchange-view"><section id="liveRates"><div class="reference-alert"><strong>参考汇率不参与利润核算</strong><span>数据每 3 小时自动刷新一次；手动刷新不会修改结算汇率，也不会重新计算历史订单利润。</span></div><article class="exchange-card"><div class="card-heading"><div><h2>实时参考汇率</h2><p id="referenceMeta">Frankfurter v2 / ECB · 最近更新时间：—</p></div><button class="refresh-button" id="referenceRefreshButton" type="button">↻ 刷新参考汇率</button></div><p class="refresh-message" id="refreshMessage" aria-live="polite"></p><table><thead><tr><th>基准货币 / 汇率货币</th><th>当前参考汇率</th><th>上一日汇率</th><th>涨跌幅</th><th>数据来源</th><th>最近更新时间</th><th>数据状态</th></tr></thead><tbody id="referenceRatesBody"></tbody></table></article></section>
@@ -97,12 +132,41 @@
     <dialog id="syncIssueDialog" class="store-dialog sync-dialog"><button class="dialog-close" type="button" id="closeSyncIssue">×</button><h2>提交同步问题</h2><p id="syncIssueShop"></p><label for="syncIssueContent">问题说明</label><textarea id="syncIssueContent" placeholder="请描述您发现的同步或数据异常"></textarea><button class="store-primary" type="button" id="submitSyncIssue">提交给管理员</button><p class="sync-submit-message" id="syncIssueMessage"></p></dialog>
     <dialog id="generalFeedbackDialog" class="feedback-dialog"><button class="dialog-close" id="closeGeneralFeedback" type="button">×</button><h2>意见反馈</h2><p>功能需求、使用问题或希望优化的地方，都可以提交给管理员处理。</p><label for="generalFeedbackType">反馈类型</label><select id="generalFeedbackType"><option>功能建议</option><option>使用问题</option><option>页面显示问题</option><option>其他反馈</option></select><label for="generalFeedbackPage">关联页面</label><input id="generalFeedbackPage" readonly /><label for="generalFeedbackContent">具体反馈内容</label><textarea id="generalFeedbackContent" placeholder="请描述您需要的功能或遇到的问题" maxlength="1000"></textarea><label for="generalFeedbackImage">图片或截图（可选）</label><input id="generalFeedbackImage" type="file" accept="image/*" /><button class="feedback-submit" id="submitGeneralFeedback" type="button">提交反馈</button><p class="feedback-result" id="generalFeedbackResult"></p></dialog>
     <main class="summary-page is-hidden" id="summaryPage"><section class="summary-filters"><label>店铺<select id="summaryShopFilter"><option value="">全部已授权店铺</option><option>US Fashion Store</option><option>PH Lifestyle Store</option><option>ID Trend Store</option><option>VN Home Store</option><option>TH Market Store</option></select></label><label>国家站点<select id="summaryCountryFilter"><option value="">全部站点</option><option>美国</option><option>菲律宾</option><option>印尼</option><option>越南</option><option>泰国</option></select></label><label>仓库<select id="summaryWarehouseFilter"><option value="">全部仓库</option><option>跨境仓</option><option>菲律宾本土</option><option>印尼本土</option><option>越南亚达</option><option>泰国本土</option></select></label><label>时间范围<select id="summaryDateFilter"><option>近 30 天</option><option>近 7 天</option><option>本月</option><option>自定义</option></select></label><label>报表币种<select id="summaryCurrencyFilter"><option>USD</option><option>CNY</option></select></label><button type="button" id="summarySearch">查询</button><button class="secondary" type="button" id="summaryReset">重置</button></section><p class="summary-scope" id="summaryScope">统计范围：全部已授权店铺 · 近 30 天 · USD</p><section class="summary-kpis"><article><span>销售额</span><strong id="summaryGmv">$128,640.28</strong><small>已分摊实付金额</small></article><article><span>有效订单数</span><strong id="summaryOrders">2,486</strong><small>已纳入利润计算</small></article><article><span>总成本</span><strong id="summaryCosts">$92,719.44</strong><small>含退款与平台费用</small></article><article><span>净利润</span><strong id="summaryProfit">$35,920.84</strong><small id="summaryMargin">净利率 27.93%</small></article><article><span>退款率</span><strong id="summaryRefund">3.84%</strong><small>退款金额 / 销售额</small></article></section><section class="summary-grid"><article class="summary-card trend-summary"><div class="summary-card-head"><div><h2>利润趋势</h2><p>销售额与净利润（USD）</p></div><span>按日</span></div><div class="summary-chart"><div class="summary-y"><span>20k</span><span>15k</span><span>10k</span><span>5k</span><span>0</span></div><div class="summary-plot"><svg viewBox="0 0 600 205" preserveAspectRatio="none"><path d="M0 147 L70 136 L135 146 L205 92 L270 114 L335 77 L400 98 L465 44 L530 63 L600 17 L600 205 L0 205Z" fill="#6dcceb2b"/><path d="M0 147 L70 136 L135 146 L205 92 L270 114 L335 77 L400 98 L465 44 L530 63 L600 17" fill="none" stroke="#2497c4" stroke-width="3"/><path d="M0 180 L70 170 L135 178 L205 145 L270 154 L335 130 L400 142 L465 108 L530 117 L600 80" fill="none" stroke="#36bb8f" stroke-width="3"/></svg><div><span>9/01</span><span>9/03</span><span>9/05</span><span>9/07</span><span>9/09</span><span>9/10</span></div></div></div><p class="summary-legend"><i></i>销售额 <b></b>净利润</p></article><article class="summary-card"><div class="summary-card-head"><div><h2>成本构成</h2><p>当前统计范围内的成本占比</p></div></div><div class="cost-list"><div><span><i class="c1"></i>商品成本</span><strong>45.6%</strong></div><div><span><i class="c2"></i>物流与代发</span><strong>19.8%</strong></div><div><span><i class="c3"></i>平台与支付费用</span><strong>16.2%</strong></div><div><span><i class="c4"></i>退款与税费</span><strong>12.4%</strong></div><div><span><i class="c5"></i>其他成本</span><strong>6.0%</strong></div></div></article></section><section class="summary-grid summary-lower"><article class="summary-card store-ranking"><div class="summary-card-head"><div><h2>店铺利润排行</h2><p>默认按净利润从高到低</p></div><select id="summarySort"><option value="profit">净利润从高到低</option><option value="gmv">销售额从高到低</option><option value="margin">净利率从高到低</option><option value="loss">亏损最多</option><option value="refund">退款率最高</option></select></div><table><thead><tr><th>店铺</th><th>销售额</th><th>总成本</th><th>净利润</th><th>净利率</th><th>数据完整度</th><th></th></tr></thead><tbody id="summaryStoresBody"></tbody></table></article><article class="summary-card summary-alerts"><div class="summary-card-head"><div><h2>异常提醒</h2><p>优先处理可能影响利润准确性的问题</p></div></div><div id="summaryAlerts"></div></article></section><section class="summary-card summary-detail"><div class="summary-card-head"><div><h2>利润明细</h2><p>按店铺汇总；点击详情可查看收入、成本、汇率和数据来源</p></div><span class="detail-mode">按店铺</span></div><table><thead><tr><th>店铺</th><th>销售额</th><th>订单数</th><th>商品成本</th><th>物流成本</th><th>平台费用</th><th>退款金额</th><th>总成本</th><th>净利润</th><th>净利率</th><th>数据完整度</th><th>详情</th></tr></thead><tbody id="summaryDetailBody"></tbody></table></section></main><dialog id="profitDetailDialog" class="profit-detail-dialog"><button class="dialog-close" type="button" id="closeProfitDetail">×</button><div id="profitDetailContent"></div></dialog>
-    <script src="app.js"></script>
-    <script src="stores.js"></script>
+    <script src="app.js?v=20260921-1"></script>
+    <script src="business-page-cache.js?v=20260921-1"></script>
+    <script src="business-dashboard-filter.js?v=20260921-5"></script>
+    <script src="store-sales-ranking.js"></script>
+    <script src="dashboard-rate-overview.js"></script>
+    <script src="sales-trend.js"></script>
+    <script src="refund-trend.js?v=20260921-3"></script>
+    <script src="business-order-details-live.js?v=20260921-5"></script>
+    <script src="business-settlement-live.js?v=20260921-4"></script>
+    <script src="stores.js?v=20260921-1"></script>
     <script src="stores-navigation.js"></script>
-    <script src="feedback.js"></script>
-    <script src="summary.js"></script>
-    <script src="summary-quality.js"></script>
+    <script src="feedback.js?v=20260921-1"></script>
+    <script src="dashboard-alerts.js"></script>
+    <script src="summary-profit-tabs.js?v=20260921-12"></script>
+    <script src="admin-demo-data.js"></script>
+    <script src="admin-ui.js"></script>
+    <script src="admin-pagination.js"></script>
+    <script src="admin-audit-ui.js"></script>
+    <script src="admin-member-form.js"></script>
+    <script src="admin-user-role-real.js?v=20260914-member-modal-fix"></script>
+    <script src="admin-warehouse-ui.js?v=20260921-3"></script>
+    <script src="admin-warehouse-delivery-form.js"></script>
+    <script src="admin-warehouse-picker-close.js"></script>
+    <script src="admin-warehouse-multiselect.js"></script>
+    <script src="admin-warehouse-new-form.js"></script>
+    <script src="admin-product-ui.js?v=20260921-2"></script>
+    <script src="admin-product-import-template.js"></script>
+    <script src="admin-order-ui.js?v=20260921-admin-query-1"></script>
+    <script src="admin-order-code-name.js"></script>
+    <script src="admin-order-import-ui.js"></script>
+    <script src="admin-profit-ui.js"></script>
+    <script src="admin-overview-ui.js"></script>
+    <script src="admin-shop-ui.js"></script>
+    <script src="admin-shop-form.js"></script>
+    <script src="admin-rate-ui.js"></script>
     <script src="admin.js"></script>
   </body>
 </html>

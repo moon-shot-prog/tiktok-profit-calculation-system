@@ -33,7 +33,7 @@
     load().then(() => render()).catch(error => render(error.message));
   }
   document.addEventListener('sales:navigate', event => { if (event.detail?.route === '#shops') show(); });
-  document.addEventListener('app:authenticated', event => { if (event.detail.role === 'business_user') load().catch(() => {}); });
+  document.addEventListener('app:authenticated', event => { if (event.detail.role === 'business_user' && !page.classList.contains('is-hidden')) load().catch(() => {}); });
   document.querySelector('#shopSearch')?.addEventListener('click', () => render());
   document.querySelector('#shopReset')?.addEventListener('click', () => { country.value = ''; sync.value = ''; name.value = ''; render(); });
   name?.addEventListener('keydown', event => { if (event.key === 'Enter') render(); });

@@ -1,5 +1,8 @@
 (() => {
   const dialog=document.querySelector('#generalFeedbackDialog'),pageInput=document.querySelector('#generalFeedbackPage'),content=document.querySelector('#generalFeedbackContent'),result=document.querySelector('#generalFeedbackResult');
+  const feedbackButton = document.querySelector('.feedback-button');
+  feedbackButton?.addEventListener('click', () => window.alert('意见反馈暂未开放，待前后端交互打通后开放使用。'));
+  return;
   const pageNames={dashboard:'首页（数据看板）',currencyPage:'汇率中心',productsPage:'商品管理',shippingPage:'运费管理',ordersPage:'订单管理',storesPage:'我的店铺',summaryPage:'利润汇总'};
   const currentPage=()=>Object.entries(pageNames).find(([id])=>!document.querySelector(`#${id}`)?.classList.contains('is-hidden'))?.[1]||'当前页面';
   document.querySelector('.feedback-button')?.addEventListener('click',()=>{pageInput.value=currentPage();content.value='';document.querySelector('#generalFeedbackImage').value='';result.textContent='';dialog.showModal();});

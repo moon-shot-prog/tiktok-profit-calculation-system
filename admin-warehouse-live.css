@@ -1,0 +1,22 @@
+.warehouse-live-note { margin: 12px 0 0; padding: 9px 12px; border-radius: 7px; background: #eef8fc; color: #34718d; font-size: 12px; }
+.warehouse-filters input { min-width: 160px; box-sizing: border-box; border: 1px solid #dce5ed; border-radius: 6px; padding: 8px; font: 12px inherit; }
+.warehouse-empty { color: #9aa7b5; font-size: 11px; }
+.warehouse-action.danger { color: #c55c4f; }
+.warehouse-save-message { grid-column: 1 / -1; margin: 0 !important; color: #bf5c51 !important; min-height: 18px; }
+.warehouse-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.warehouse-detail-grid div { padding: 10px; background: #f5f8fb; border-radius: 7px; color: #738298; font-size: 11px; }
+.warehouse-detail-grid strong { display: block; margin-top: 5px; color: #304057; font-size: 12px; overflow-wrap: anywhere; }
+.warehouse-detail-grid .warehouse-detail-wide { grid-column: 1 / -1; }
+.warehouse-readonly-note { margin-top: 18px; padding: 10px; border-radius: 7px; background: #f7fbfd; color: #49718e; }
+.warehouse-version-summary { margin: 8px 0 0; color: #64748b; font-size: 12px; }
+.warehouse-cost-history { margin-top: 18px; }
+.warehouse-cost-history h3 { margin: 0 0 9px; color: #304057; font-size: 14px; }
+.warehouse-cost-history table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.warehouse-cost-history th, .warehouse-cost-history td { padding: 9px 8px; border-bottom: 1px solid #e5ebf1; text-align: left; color: #53657a; }
+.warehouse-cost-history th { color: #718198; font-weight: 600; background: #f7fafc; }
+.warehouse-cost-history tr.is-recent td { background: #edf9f6; color: #18755d; font-weight: 600; }
+.warehouse-cost-history i { display: inline-block; margin-left: 6px; padding: 2px 5px; border-radius: 8px; background: #cfeee4; color: #18755d; font-size: 10px; font-style: normal; }
+.warehouse-dialog-actions { display: flex; gap: 9px; margin-top: 18px; }
+.warehouse-dialog-actions .secondary { background: #fff; border: 1px solid #dce5ed; color: #65768a; }
+.warehouse-dialog-actions .danger-button { background: #c75c4f; }
+@media (max-width: 900px) { .warehouse-detail-grid { grid-template-columns: 1fr; } }

@@ -1,0 +1,28 @@
+.refund-trend-card { margin: 0 0 18px; }
+.refund-trend-controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.refund-trend-controls select { border: 1px solid #e2e7ef; border-radius: 7px; background: #fff; color: #556278; padding: 6px 9px; font: 11px inherit; cursor: pointer; }
+.refund-custom-range { display: flex; align-items: center; gap: 7px; margin-top: 12px; color: #8996a8; font-size: 11px; }
+.refund-custom-range input { border: 1px solid #e2e7ef; border-radius: 6px; padding: 6px 8px; color: #556278; font: 11px inherit; }
+.refund-orders-line { background: #4c92df; }
+.refund-count-line { background: #ef7e8c; }
+.refund-line-chart { height: 225px; }
+.refund-chart-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
+.refund-chart-scroll .chart-area { min-width: 640px; }
+.refund-chart-scroll .chart-x { gap: 12px; justify-content: space-between; }
+.refund-chart-scroll .chart-x span { min-width: 42px; text-align: center; white-space: nowrap; }
+.refund-order-dot { fill: #4c92df; stroke: #fff; stroke-width: 1.5; }
+.refund-count-dot { fill: #ef7e8c; stroke: #fff; stroke-width: 1.5; }
+.refund-order-dot-label, .refund-count-dot-label { font: 10px "Microsoft YaHei", Arial, sans-serif; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+.refund-order-dot-label { fill: #327dca; }
+.refund-count-dot-label { fill: #de6375; }
+.refund-rate-label { fill: #278f81; font: 9px "Microsoft YaHei", Arial, sans-serif; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+.refund-daily-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin-top: 14px; max-height: 180px; overflow: auto; padding-right: 3px; }
+.refund-daily-item { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 8px; padding: 9px 10px; border: 1px solid #edf1f5; border-radius: 7px; color: #7f8ba0; font-size: 11px; background: #fbfcfe; }
+.refund-daily-item b { color: #526078; font-size: 12px; }
+.refund-daily-item span { white-space: nowrap; }
+.refund-daily-item strong { color: #3c4c65; }
+.refund-daily-item em { grid-column: 1 / -1; color: #dd6575; font-style: normal; font-weight: 600; }
+.refund-daily-item small { grid-column: 1 / -1; color: #8c99ab; font-size: 10px; }
+.refund-empty { grid-column: 1 / -1; margin: 3px 0; color: #97a4b5; font-size: 12px; }
+.refund-trend-note { margin: 10px 0 0; color: #97a4b5; font-size: 11px; }
+@media (max-width: 760px) { .refund-trend-controls { justify-content: flex-start; margin-top: 8px; }.refund-custom-range { flex-wrap: wrap; } }

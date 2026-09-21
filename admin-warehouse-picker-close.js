@@ -1,0 +1,1 @@
+(()=>{document.addEventListener('click',event=>{document.querySelectorAll('.warehouse-original-picker[open]').forEach(picker=>{if(!picker.contains(event.target))picker.removeAttribute('open')})})})();

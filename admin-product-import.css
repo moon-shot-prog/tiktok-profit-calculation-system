@@ -1,0 +1,38 @@
+.product-admin-dialog .product-import-form {
+  align-items: end;
+}
+
+.product-admin-dialog .product-import-upload {
+  grid-column: 1 / 2;
+  margin: 0;
+}
+
+.product-admin-dialog .product-import-preview {
+  grid-column: 2 / 3;
+  align-self: end;
+  justify-self: stretch;
+  height: 42px;
+  margin-bottom: 20px;
+}
+
+.product-admin-dialog .product-import-form .product-upload input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+}
+
+.product-admin-dialog .product-import-form .product-upload small {
+  line-height: 1.4;
+}
+
+@media (max-width: 760px) {
+  .product-admin-dialog .product-import-upload,
+  .product-admin-dialog .product-import-preview {
+    grid-column: 1;
+  }
+
+  .product-admin-dialog .product-import-preview {
+    margin-bottom: 0;
+  }
+}

@@ -1,0 +1,77 @@
+/* 业务端结算单：页面框架固定，仅表格区域可滚动。 */
+.orders-page.business-settlement-active {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 72px);
+  max-width: none;
+  overflow: hidden;
+}
+
+.orders-page.business-settlement-active .settlement-filters,
+.orders-page.business-settlement-active .settlement-rule-note {
+  flex: 0 0 auto;
+}
+
+.orders-page.business-settlement-active .settlement-filters {
+  position: static;
+}
+
+.orders-page.business-settlement-active .settlement-table-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+}
+
+.orders-page.business-settlement-active .settlement-table-card table {
+  margin: 0;
+}
+
+.orders-page.business-settlement-active .settlement-table-card thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.orders-page.business-settlement-active .settlement-table-card th:first-child,
+.orders-page.business-settlement-active .settlement-table-card td:first-child {
+  width: 128px;
+  min-width: 128px;
+  white-space: normal;
+}
+
+.orders-page.business-settlement-active .settlement-table-card td:first-child small {
+  display: block;
+  margin-top: 4px;
+  color: #73859a;
+}
+
+.orders-page.business-settlement-active .settlement-table-card th:nth-child(8),
+.orders-page.business-settlement-active .settlement-table-card td:nth-child(8) {
+  width: 220px;
+  min-width: 180px;
+  max-width: 220px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.orders-page.business-settlement-active .settlement-table-card .product-pagination {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  min-width: max-content;
+  padding: 12px 16px;
+  background: #fff;
+  border-top: 1px solid #e7edf2;
+}
+
+@media (max-width: 760px) {
+  .orders-page.business-settlement-active {
+    height: calc(100vh - 60px);
+  }
+}

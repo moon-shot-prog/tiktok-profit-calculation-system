@@ -17,6 +17,7 @@ const dialogSubmit = document.querySelector('#dialogSubmit');
 const dialogMessage = document.querySelector('#dialogMessage');
 const AUTH_SESSION_KEY = 'tiktokShopAuthSession';
 let dialogMode = '';
+let currentWorkspaceRole = '';
 
 function isEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
 function isPhone(value) { return /^(?:\+?86)?1[3-9]\d{9}$/.test(value.replace(/[\s-]/g, '')); }
@@ -28,6 +29,7 @@ function describeAccount() {
   accountFormat.textContent = !value ? '系统将自动识别邮箱或手机号' : isEmail(value) ? '已识别为邮箱账号' : isPhone(value) ? '已识别为手机号账号' : '请输入有效的邮箱或手机号';
 }
 function enterWorkspace(role, user) {
+  currentWorkspaceRole = role;
   loginPage.classList.add('is-hidden');
   const isSales = role === 'business_user';
   salesWorkspace.classList.toggle('is-hidden', !isSales);
@@ -39,6 +41,8 @@ function enterWorkspace(role, user) {
     document.querySelector('.user-avatar').textContent = name.slice(0, 1).toUpperCase();
   }
   document.dispatchEvent(new CustomEvent('app:authenticated', { detail: { role, user } }));
+  document.querySelector('#superWorkspaceSwitch')?.classList.toggle('is-hidden', role !== 'super_admin');
+  document.querySelector('#superViewBadge')?.classList.toggle('is-hidden', role !== 'super_admin' || !isSales);
 }
 async function requestJson(url, body) {
   const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -102,11 +106,24 @@ dialogForm.addEventListener('submit', async event => {
     dialogMessage.textContent = error.message;
   } finally { dialogSubmit.disabled = false; }
 });
-document.querySelector('#inviteMember').addEventListener('click', () => window.alert('成员邀请将在管理后台接入 Supabase 后开放。当前请勿使用原型邀请链接。'));
+document.querySelector('#inviteMember')?.addEventListener('click', () => window.alert('成员邀请将在管理后台接入 Supabase 后开放。当前请勿使用原型邀请链接。'));
 document.querySelectorAll('.logout').forEach(button => button.addEventListener('click', () => {
   localStorage.removeItem(AUTH_SESSION_KEY); sessionStorage.removeItem(AUTH_SESSION_KEY);
   adminWorkspace.classList.add('is-hidden'); salesWorkspace.classList.add('is-hidden'); loginPage.classList.remove('is-hidden'); password.value = '';
 }));
+document.querySelector('#enterBusinessWorkspace')?.addEventListener('click', () => {
+  if (currentWorkspaceRole !== 'super_admin') return;
+  adminWorkspace.classList.add('is-hidden'); salesWorkspace.classList.remove('is-hidden');
+  document.querySelector('#superViewBadge')?.classList.remove('is-hidden');
+  showDashboardPage?.();
+});
+function returnToAdminWorkspace() {
+  if (currentWorkspaceRole !== 'super_admin') return;
+  salesWorkspace.classList.add('is-hidden'); adminWorkspace.classList.remove('is-hidden');
+  document.querySelector('#superViewBadge')?.classList.add('is-hidden');
+}
+document.querySelector('#enterAdminWorkspace')?.addEventListener('click', returnToAdminWorkspace);
+document.querySelector('#returnAdminWorkspace')?.addEventListener('click', returnToAdminWorkspace);
 updateInitialization();
 if (location.protocol === 'file:') formMessage.textContent = '当前为文件预览模式。请在浏览器打开 http://localhost:3000 后登录。';
 const remembered = localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY);
@@ -142,8 +159,10 @@ const profitMain = document.querySelector('.profit-main');
 });
 const shippingPage = document.createElement('main');
 shippingPage.className = 'shipping-page is-hidden'; shippingPage.id = 'shippingPage';
-shippingPage.innerHTML = '<div class="page-heading"><div><p class="eyebrow">SHIPPING</p><h1>仓库代发成本</h1><p>业务员仅可查看仓库代发费用及历史版本。</p></div><button class="shipping-history-button" id="shippingHistoryButton">代发费用修改记录</button></div><section class="shipping-filter"><label>仓库<select id="shippingWarehouseFilter"><option value="">全部仓库</option></select></label><button type="button" id="shippingSearch">查询</button></section><section class="shipping-card"><table><thead><tr><th>仓库</th><th>代发费用（每包裹）</th><th>上次费用（每包裹）</th><th>涨幅</th><th>费用更新时间</th><th>对应仓库发货物流</th></tr></thead><tbody id="shippingCostsBody"></tbody></table></section><p class="shipping-note">完整的新增、修改及操作权限统一在后续管理后台提供；业务员侧仅展示费用与只读版本记录。</p>';
+shippingPage.innerHTML = '<div class="page-heading"><div><p class="eyebrow">SHIPPING</p><h1>仓库代发成本</h1><p>业务员仅可查看仓库代发费用及历史版本。</p></div><button class="shipping-history-button" id="shippingHistoryButton">代发费用修改记录</button></div><section class="shipping-filter"><label>仓库<select id="shippingWarehouseFilter"><option value="">全部仓库</option></select></label><button type="button" id="shippingSearch">查询</button></section><section class="shipping-card"><table><thead><tr><th>仓库</th><th>代发费用（每包裹）</th><th>上次费用（每包裹）</th><th>涨幅</th><th>费用更新时间</th><th>物流承运商</th></tr></thead><tbody id="shippingCostsBody"></tbody></table></section><p class="shipping-note">完整的新增、修改及操作权限统一在后续管理后台提供；业务员侧仅展示费用与只读版本记录。</p>';
 document.querySelector('.profit-main')?.append(shippingPage);
+shippingPage.querySelector('th:nth-child(2)').textContent = '代发费用';
+shippingPage.querySelector('th:nth-child(3)').textContent = '上次费用';
 const shippingNav = document.querySelector('a[href="#shipping"]');
 shippingNav?.setAttribute('id', 'shippingExpand');
 shippingNav?.setAttribute('aria-expanded', 'false');
@@ -168,6 +187,7 @@ function showCurrencyPage() {
   document.querySelector('#topbarSubtitle').textContent = '统一管理实时参考与报表结算汇率';
   document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#currency'));
   document.querySelector('#exchangeExpand')?.classList.add('active');
+  loadBusinessSettlementRates().catch(() => {});
 }
 function showDashboardPage() {
   hideSalesPages();
@@ -188,11 +208,16 @@ function showProductsPage() {
   document.querySelector('#topbarSubtitle').classList.remove('is-hidden');
   document.querySelector('#exchangeExpand')?.classList.remove('active');
   document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#products'));
+  loadBusinessProducts().catch(error => {
+    const body = document.querySelector('#productsBody');
+    if (body) body.innerHTML = `<tr><td colspan="8">${String(error.message || '无法读取商品数据')}</td></tr>`;
+  });
 }
 function showShippingPage() {
   hideSalesPages(); shippingPage.classList.remove('is-hidden');
   document.querySelector('#topbarTitle').textContent = '运费管理'; document.querySelector('#reportCurrency').classList.add('is-hidden'); document.querySelector('#topbarSubtitle').textContent = '仓库代发成本'; document.querySelector('#topbarSubtitle').classList.remove('is-hidden'); document.querySelector('#exchangeExpand')?.classList.remove('active');
   document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#shipping'));
+  loadShippingCosts().catch(error => { document.querySelector('#shippingCostsBody').innerHTML = `<tr><td colspan="6">${String(error.message || '无法读取仓库代发成本')}</td></tr>`; });
 }
 function showOrdersPage(view = 'details') {
   hideSalesPages(); ordersPage.classList.remove('is-hidden');
@@ -200,6 +225,7 @@ function showOrdersPage(view = 'details') {
   document.querySelector('#settlementPage').classList.toggle('is-hidden', view === 'details'); document.querySelector('.order-table-card').classList.toggle('is-hidden', view !== 'details'); document.querySelector('#orderFilters').classList.toggle('is-hidden', view !== 'details');
   document.querySelectorAll('.order-subnav button').forEach(button => button.classList.toggle('active', (view === 'details' && button.id === 'orderDetailNav') || (view === 'settlement' && button.id === 'settlementNav')));
   document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#orders'));
+  document.dispatchEvent(new CustomEvent('sales:navigate', { detail: { route: '#orders', view } }));
 }
 function navigateSalesPage(route) {
   if (route === '#summary' || route === '#shops') {
@@ -261,7 +287,10 @@ document.querySelector('#exchangeExpand')?.addEventListener('click', event => {
   children.classList.toggle('is-hidden', expanded);
 });
 const versionsDialog = document.querySelector('#versionsDialog');
-document.querySelector('#versionButton')?.addEventListener('click', () => versionsDialog.showModal());
+document.querySelector('#versionButton')?.addEventListener('click', async () => {
+  await loadBusinessSettlementRates().catch(() => {});
+  versionsDialog.showModal();
+});
 document.querySelector('#closeVersions')?.addEventListener('click', () => versionsDialog.close());
 
 const referenceButton = document.querySelector('#referenceRefreshButton');
@@ -311,17 +340,43 @@ function renderReferenceRates(rates) {
     return `<tr><td>${item.pair.replace('/', ' / ')}</td><td>${Number(item.rate).toFixed(4)}</td><td>${item.previousRate === null ? '—' : Number(item.previousRate).toFixed(4)}</td><td class="${changeClass}">${change}</td><td>Frankfurter v2 / ECB</td><td>${item.rateDate || '—'}</td><td><span class="data-status realtime">实时</span></td></tr>`;
   }).join('');
 }
+let businessSettlementRates = [];
+let businessSettlementVersions = [];
+const settlementRateToken = () => { try { return JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY) || '{}').accessToken; } catch { return null; } };
+const settlementStatusLabel = status => ({ active: '生效中', pending: '未生效', expired: '已失效', deactivated: '已作废' })[status] || status || '尚未设置';
+const settlementStatusClass = status => status === 'active' ? 'active-status' : status === 'pending' ? 'pending-status' : 'void-status';
+const settlementShortDate = value => value ? new Date(value).toLocaleDateString('zh-CN').replaceAll('/', '-') : '—';
+const settlementDateTime = value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }).replaceAll('/', '-') : '—';
+const escapeSettlementText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 function renderSettlementRates(quote) {
   const bases = quote === 'CNY' ? ['THB', 'MYR', 'VND', 'PHP', 'IDR', 'USD'] : ['THB', 'MYR', 'VND', 'PHP', 'IDR', 'CNY'];
   const body = document.querySelector('#settlementRates tbody');
   const headers = document.querySelector('#settlementRates thead tr');
   if (!body || !headers) return;
   headers.innerHTML = '<th>基准货币 / 汇率货币</th><th>结算汇率</th><th>生效日期</th><th>备注</th><th>更新时间</th><th>状态</th>';
-  body.innerHTML = bases.map((base, index) => `<tr><td>${base} / ${quote}</td><td>${(index + 1.18).toFixed(4)}</td><td>2026-09-01</td><td>9 月财务月度结算汇率</td><td>2026-08-30 16:20</td><td><span class="status active-status">生效中</span></td></tr>`).join('');
+  body.innerHTML = bases.map(base => {
+    const pair = businessSettlementRates.filter(rate => rate.base_currency === base && rate.quote_currency === quote);
+    const rate = pair.find(item => item.status === 'active') || pair.filter(item => item.status === 'pending').sort((left, right) => left.effective_date.localeCompare(right.effective_date))[0];
+    if (!rate) return `<tr><td>${base} / ${quote}</td><td>—</td><td>—</td><td>尚未设置</td><td>—</td><td><span class="status void-status">尚未设置</span></td></tr>`;
+    return `<tr><td>${base} / ${quote}</td><td>${Number(rate.settlement_rate).toFixed(6)}</td><td>${settlementShortDate(rate.effective_date)}</td><td>${escapeSettlementText(rate.note || '—')}</td><td>${settlementDateTime(rate.updated_at)}</td><td><span class="status ${settlementStatusClass(rate.status)}">${settlementStatusLabel(rate.status)}</span></td></tr>`;
+  }).join('');
   const versionBody = document.querySelector('#versionsDialog tbody');
   const versionHeaders = document.querySelector('#versionsDialog thead tr');
-  if (versionHeaders) versionHeaders.innerHTML = '<th>货币对</th><th>结算汇率</th><th>生效日期</th><th>更新时间</th><th>备注</th><th>状态</th>';
-  if (versionBody) versionBody.innerHTML = bases.map((base, index) => `<tr><td>${base} / ${quote}</td><td>${(index + 1.18).toFixed(4)}</td><td>2026-09-01</td><td>2026-08-30 16:20</td><td>9 月财务月度结算汇率</td><td><span class="status active-status">生效中</span></td></tr>`).join('');
+  if (versionHeaders) versionHeaders.innerHTML = '<th>货币对</th><th>操作</th><th>结算汇率</th><th>更新时间</th><th>备注</th>';
+  if (versionBody) {
+    const matchingIds = new Set(businessSettlementRates.filter(rate => rate.quote_currency === quote).map(rate => rate.id));
+    const rows = businessSettlementVersions.filter(version => matchingIds.has(version.rate_id));
+    versionBody.innerHTML = rows.map(version => { const current = version.current_data || {}; const before = version.previous_data || {}; const rate = current.settlement_rate ?? before.settlement_rate; const formattedRate = rate === null || rate === undefined ? '—' : Number(rate).toFixed(6); return `<tr><td>${escapeSettlementText(`${current.base_currency || before.base_currency || '—'} / ${current.quote_currency || before.quote_currency || '—'}`)}</td><td>${({ created: '新增', updated: '修改', deactivated: '作废' })[version.action] || version.action}</td><td>${formattedRate}</td><td>${settlementDateTime(version.created_at)}</td><td>${escapeSettlementText(current.note || before.note || '—')}</td></tr>`; }).join('') || '<tr><td colspan="5">暂无版本记录</td></tr>';
+  }
+}
+async function loadBusinessSettlementRates() {
+  const token = settlementRateToken();
+  if (!token) return;
+  const response = await fetch(`${API_BASE}/api/business/settlement-rates`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || '无法读取报表结算汇率');
+  businessSettlementRates = data.rates || []; businessSettlementVersions = data.versions || [];
+  renderSettlementRates(quoteCurrency?.value || 'CNY');
 }
 async function requestReferenceRates(isManual, forceRefresh = false) {
   if (referenceRefreshing) return;
@@ -366,7 +421,7 @@ async function requestReferenceRates(isManual, forceRefresh = false) {
 }
 referenceButton?.addEventListener('click', () => requestReferenceRates(true));
 quoteCurrency?.addEventListener('change', () => {
-  renderSettlementRates(quoteCurrency.value);
+  loadBusinessSettlementRates().catch(() => {});
   requestReferenceRates(false, true);
 });
 if (referenceButton) { renderSettlementRates(quoteCurrency?.value || 'CNY'); requestReferenceRates(false); }
@@ -375,15 +430,32 @@ const settlementHint = document.querySelector('.settlement-toolbar p');
 if (settlementHint) settlementHint.textContent = '报表结算汇率用于利润计算；历史订单始终按下单日期锁定的结算汇率计算。';
 
 const warehouseNames = ['跨境仓', '菲律宾本土', '印尼本土', '越南亚达', '越南904千易', '越南908千易', '泰国本土'];
-const productCatalog = Array.from({ length: 126 }, (_, index) => ({
-  sku: `TKS-${String(index + 1).padStart(5, '0')}`,
-  name: `${['便携收纳盒', '运动水杯', '简约双肩包', '无线蓝牙耳机', '夏日防晒帽', '厨房置物架'][index % 6]} ${index + 1}`,
-  price: (18.9 + (index % 17) * 6.35).toFixed(2),
-  warehouse: warehouseNames[index % warehouseNames.length],
-  updatedAt: `2026-09-${String(10 - (index % 9)).padStart(2, '0')}`,
-  status: index % 41 === 0 ? '待管理员审核' : '可用',
-  costAvailable: index % 29 !== 0
-}));
+let productCatalog = [];
+let productWarehouses = [];
+let productFilterWarehouses = [];
+const productToken = () => { try { return JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY) || '{}').accessToken; } catch { return null; } };
+const escapeProductText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+const productShortDate = value => value ? new Date(value).toLocaleDateString('zh-CN').replaceAll('/', '-') : '—';
+function setProductWarehouseOptions() {
+  const filter = document.querySelector('#warehouseFilter');
+  if (!filter) return;
+  const selected = filter.value;
+  filter.innerHTML = '<option value="">所有仓库</option>' + productFilterWarehouses.map(warehouse => `<option value="${escapeProductText(warehouse.id)}">${escapeProductText(warehouse.name)}</option>`).join('');
+  filter.value = productFilterWarehouses.some(warehouse => warehouse.id === selected) ? selected : '';
+}
+async function loadBusinessProducts() {
+  const headers = { Authorization: `Bearer ${productToken()}` };
+  const [response, costsResponse] = await Promise.all([
+    fetch('/api/business/products', { headers }),
+    fetch('/api/business/warehouse-costs', { headers })
+  ]);
+  const [data, costsData] = await Promise.all([response.json().catch(() => ({})), costsResponse.json().catch(() => ({}))]);
+  if (!response.ok) throw new Error(data.message || '无法读取商品数据');
+  productWarehouses = data.warehouses || [];
+  productFilterWarehouses = costsResponse.ok ? (costsData.costs || []).map(item => item.warehouse) : productWarehouses;
+  productCatalog = (data.products || []).map(item => ({ id: item.id, sku: item.product_code, name: item.product_name, price: Number(item.sale_price), currency: item.currency_code, warehouseId: item.warehouse_id, warehouse: productWarehouses.find(warehouse => warehouse.id === item.warehouse_id)?.name || '—', imageUrl: item.image_url, updatedAt: String(item.updated_at || '').slice(0, 10), status: '可用', costAvailable: true }));
+  setProductWarehouseOptions(); renderProducts();
+}
 let productPage = 1;
 function filteredProducts() {
   const warehouse = document.querySelector('#warehouseFilter')?.value || '';
@@ -392,7 +464,7 @@ function filteredProducts() {
   const start = document.querySelector('#updatedStart')?.value || '';
   const end = document.querySelector('#updatedEnd')?.value || '';
   const status = document.querySelector('#productStatusFilter')?.value || '';
-  return productCatalog.filter(product => (!warehouse || product.warehouse === warehouse) && (!sku || product.sku.toLowerCase().includes(sku)) && (!name || product.name.toLowerCase().includes(name)) && (!start || product.updatedAt >= start) && (!end || product.updatedAt <= end) && (!status || product.status === status));
+  return productCatalog.filter(product => (!warehouse || product.warehouseId === warehouse) && (!sku || product.sku.toLowerCase().includes(sku)) && (!name || product.name.toLowerCase().includes(name)) && (!start || product.updatedAt >= start) && (!end || product.updatedAt <= end) && (!status || product.status === status));
 }
 const productFilters = document.querySelector('.product-filters');
 if (productFilters && !document.querySelector('#updatedStart')) {
@@ -403,11 +475,11 @@ if (productFilters && !document.querySelector('#updatedStart')) {
 }
 if (productFilters && !document.querySelector('#productStatusFilter')) {
   const statusFilter = document.createElement('label');
-  statusFilter.innerHTML = '状态<select id="productStatusFilter"><option value="">全部</option><option value="待管理员审核">待审核</option><option value="可用">可用</option><option value="已驳回">已驳回</option></select>';
+  statusFilter.innerHTML = '状态<select id="productStatusFilter"><option value="">全部</option><option value="可用">可用</option></select>';
   productFilters.insertBefore(statusFilter, productFilters.querySelector('.filter-buttons'));
   const operationBar = document.createElement('div');
   operationBar.className = 'product-operation-bar';
-  operationBar.innerHTML = '<span>业务员可新增、导入、导出和反馈；已审核商品不可直接修改。</span><div><button type="button" id="productImport">导入</button><button type="button" id="productExport">导出</button><button type="button" id="productCreate">新增商品</button><input id="productImportFile" type="file" accept=".csv,.xlsx" hidden /></div>';
+  operationBar.innerHTML = '<span>商品资料由管理员维护；业务员可查看、导出和提交反馈。</span><div><button type="button" id="productExport">导出</button></div>';
   productFilters.after(operationBar);
 }
 function renderProducts() {
@@ -419,7 +491,7 @@ function renderProducts() {
   const pageCount = Math.max(1, Math.ceil(products.length / pageSize));
   productPage = Math.min(productPage, pageCount);
   const visible = products.slice((productPage - 1) * pageSize, productPage * pageSize);
-  body.innerHTML = visible.length ? visible.map(product => `<tr><td><span class="product-image">▧</span></td><td>${product.sku}</td><td>${product.name}</td><td><strong>${product.currency || 'CNY'} ${Number(product.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td><td>${product.warehouse}</td><td>${product.updatedAt}</td><td><span class="product-status ${product.status}">${product.status}</span></td><td><button class="feedback-product" data-sku="${product.sku}">反馈</button></td></tr>`).join('') : '<tr><td colspan="8">暂无匹配商品</td></tr>';
+  body.innerHTML = visible.length ? visible.map(product => `<tr><td>${product.imageUrl ? `<img class="product-image" src="${escapeProductText(product.imageUrl)}" alt="${escapeProductText(product.name)}" />` : '<span class="product-image">▧</span>'}</td><td>${escapeProductText(product.sku)}</td><td>${escapeProductText(product.name)}</td><td><strong>${escapeProductText(product.currency || 'CNY')} ${Number(product.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td><td>${escapeProductText(product.warehouse)}</td><td>${productShortDate(product.updatedAt)}</td><td><span class="product-status ${product.status}">${product.status}</span></td><td><button class="feedback-product" data-sku="${escapeProductText(product.sku)}">反馈</button></td></tr>`).join('') : '<tr><td colspan="8">暂无可用商品。请联系管理员维护商品，或确认店铺已关联仓库。</td></tr>';
   document.querySelector('#productTotal').textContent = `共 ${products.length} 条`;
   document.querySelector('#previousProductPage').disabled = productPage === 1;
   document.querySelector('#nextProductPage').disabled = productPage === pageCount;
@@ -473,54 +545,40 @@ document.querySelector('#productFeedbackForm').addEventListener('submit', event 
 document.querySelectorAll('[data-close-feedback]').forEach(button => button.addEventListener('click', () => feedbackDialog.close()));
 document.querySelectorAll('[data-close-history]').forEach(button => button.addEventListener('click', () => feedbackHistoryDialog.close()));
 
-const productCreateDialog = document.createElement('dialog');
-productCreateDialog.className = 'product-create-dialog';
-productCreateDialog.innerHTML = '<form id="productCreateForm"><button type="button" class="dialog-close" data-close-create>×</button><h2>新增商品</h2><div class="feedback-grid"><label>商品图片（可选）<input type="file" accept="image/*" /></label><label>商品编码<input id="newProductSku" required /></label><label class="wide">商品名称<input id="newProductName" required /></label><label>商品售价 / 币种<input id="newProductPrice" type="number" min="0" step="0.01" required /></label><label>币种<select id="newProductCurrency"><option>CNY</option><option>USD</option></select></label><label class="wide">仓库<select id="newProductWarehouse" required></select></label></div><p class="feedback-tip">新增后状态为“待管理员审核”，审核通过前不会进入利润核算。</p><div class="feedback-actions"><button type="button" data-close-create>取消</button><button class="submit-feedback" type="submit">提交审核</button></div></form>';
-document.body.append(productCreateDialog);
-document.querySelector('#newProductWarehouse').innerHTML = warehouseNames.map(name => `<option>${name}</option>`).join('');
-function findDuplicate(sku, warehouse) { return productCatalog.find(product => product.sku.toLowerCase() === sku.toLowerCase() && product.warehouse === warehouse); }
-function duplicateMessage(product) { return `该商品编码已存在：${product.name}；仓库：${product.warehouse}；更新时间：${product.updatedAt}`; }
-document.querySelector('#productCreate')?.addEventListener('click', () => productCreateDialog.showModal());
-document.querySelectorAll('[data-close-create]').forEach(button => button.addEventListener('click', () => productCreateDialog.close()));
-document.querySelector('#productCreateForm').addEventListener('submit', event => {
-  event.preventDefault();
-  const sku = document.querySelector('#newProductSku').value.trim(); const warehouse = document.querySelector('#newProductWarehouse').value;
-  const duplicate = findDuplicate(sku, warehouse); if (duplicate) return window.alert(duplicateMessage(duplicate));
-  productCatalog.unshift({ sku, name: document.querySelector('#newProductName').value.trim(), price: Number(document.querySelector('#newProductPrice').value).toFixed(2), currency: document.querySelector('#newProductCurrency').value, warehouse, updatedAt: new Date().toISOString().slice(0, 10), status: '待管理员审核' });
-  productCreateDialog.close(); productPage = 1; renderProducts(); window.alert('商品已提交，等待管理员审核；审核通过前不会进入利润核算。');
-});
 document.querySelector('#productExport')?.addEventListener('click', () => {
   const rows = filteredProducts(); const header = '商品编码,商品名称,商品单价,币种,仓库,更新时间,状态';
   const csv = [header, ...rows.map(item => [item.sku, item.name, item.price, item.currency || 'CNY', item.warehouse, item.updatedAt, item.status].map(value => `"${String(value).replace(/"/g, '""')}"`).join(','))].join('\n');
   const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })); link.download = '商品列表.csv'; link.click(); URL.revokeObjectURL(link.href);
 });
-document.querySelector('#productImport')?.addEventListener('click', () => document.querySelector('#productImportFile').click());
-document.querySelector('#productImportFile')?.addEventListener('change', event => {
-  const file = event.target.files[0]; if (!file) return;
-  if (file.name.toLowerCase().endsWith('.xlsx')) { window.alert('已接收 Excel 文件。当前前端原型会将其交由服务端解析并校验；请使用 CSV 进行本地预览导入。'); return; }
-  const reader = new FileReader(); reader.onload = () => {
-    const lines = String(reader.result).replace(/^\uFEFF/, '').trim().split(/\r?\n/); const rows = lines.slice(1).map(line => line.split(',').map(value => value.trim().replace(/^"|"$/g, '')));
-    let success = 0, skipped = 0; const failures = []; rows.forEach((row, index) => { const [sku, name, price, currency, warehouse] = row; if (!sku || !name || !price || !currency || !warehouse) { failures.push(`第 ${index + 2} 行：必填项缺失`); return; } if (!/^\d+(\.\d{1,2})?$/.test(price) || !['CNY', 'USD'].includes(currency)) { failures.push(`第 ${index + 2} 行：价格或币种格式错误`); return; } if (!warehouseNames.includes(warehouse)) { failures.push(`第 ${index + 2} 行：仓库无效`); return; } const duplicate = findDuplicate(sku, warehouse); if (duplicate) { skipped += 1; failures.push(`第 ${index + 2} 行：${duplicateMessage(duplicate)}`); return; } productCatalog.unshift({ sku, name, price: Number(price).toFixed(2), currency, warehouse, updatedAt: new Date().toISOString().slice(0, 10), status: '待管理员审核' }); success += 1; });
-    renderProducts(); window.alert(`导入结果：成功 ${success} 条，跳过 ${skipped} 条，失败 ${failures.length - skipped} 条。\n${failures.slice(0, 3).join('\n') || '全部校验通过。'}`);
-  }; reader.readAsText(file);
-});
 
-const shippingCosts = [
-  ['跨境仓', 12.8, 12.1, ['J&T Express', '4PX']], ['菲律宾本土', 38.5, 37.2, ['J&T PH', 'Flash Express']], ['印尼本土', 16.4, 16.4, ['JNE', 'SiCepat']], ['越南亚达', 9.8, 9.2, ['GHN', 'GHTK']], ['越南904千易', 10.3, 10.3, ['VNPost']], ['越南908千易', 10.6, 9.9, ['Ninja Van']], ['泰国本土', 14.2, 13.7, ['Flash Thailand', 'Kerry Express']]
-].map(([warehouse, cost, previous, logistics], index) => ({ warehouse, cost: warehouse === '越南904千易' ? null : cost, previous, logistics, updatedAt: `2026-09-${String(10 - index).padStart(2, '0')}` }));
+let shippingCosts = [];
+let shippingCostHistory = [];
 const shippingSelect = document.querySelector('#shippingWarehouseFilter');
-shippingSelect.innerHTML += warehouseNames.map(name => `<option>${name}</option>`).join('');
+const shippingToken = () => { try { return JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY) || '{}').accessToken; } catch { return null; } };
+const escapeShippingText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+const costUnitName = value => value === 'per_package' ? '每包裹' : '每单';
+const costText = cost => cost ? `${cost.currency_code} ${Number(cost.amount).toFixed(2)} / ${costUnitName(cost.billing_unit)}` : '费用缺失';
+async function loadShippingCosts() {
+  const response = await fetch('/api/business/warehouse-costs', { headers: { Authorization: `Bearer ${shippingToken()}` } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || '无法读取仓库代发成本');
+  shippingCosts = (data.costs || []).map(item => ({ warehouseId: item.warehouse.id, warehouse: item.warehouse.name, cost: item.currentCost ? Number(item.currentCost.amount) : null, current: item.currentCost, previous: item.previousCost ? Number(item.previousCost.amount) : null, previousVersion: item.previousCost, updatedAt: item.currentCost?.effective_date || null, logistics: item.warehouse.shipping_provider_name || '—' }));
+  shippingCostHistory = (data.costs || []).flatMap(item => item.history.map((current, index) => ({ warehouse: item.warehouse.name, current, previous: item.history[index + 1] || null })));
+  shippingSelect.innerHTML = '<option value="">全部仓库</option>' + shippingCosts.map(item => `<option value="${escapeShippingText(item.warehouseId)}">${escapeShippingText(item.warehouse)}</option>`).join('');
+  renderShippingCosts();
+  window.profitDataQuality?.refresh();
+}
 function renderShippingCosts() {
   const selected = shippingSelect.value;
-  const items = shippingCosts.filter(item => !selected || item.warehouse === selected);
-  document.querySelector('#shippingCostsBody').innerHTML = items.length ? items.map(item => { const change = item.cost === null ? null : ((item.cost - item.previous) / item.previous) * 100; return `<tr><td>${item.warehouse}</td><td><strong>${item.cost === null ? '费用缺失' : `CNY ${item.cost.toFixed(2)}`}</strong></td><td>CNY ${item.previous.toFixed(2)}</td><td class="${change > 0 ? 'negative' : 'positive'}">${change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`}</td><td>${item.updatedAt}</td><td><div class="logistics-tags">${item.logistics.map(name => `<span>${name}</span>`).join('')}</div></td></tr>`; }).join('') : '<tr><td colspan="6">暂无仓库费用数据</td></tr>';
+  const items = shippingCosts.filter(item => !selected || item.warehouseId === selected);
+  document.querySelector('#shippingCostsBody').innerHTML = items.length ? items.map(item => { const change = item.cost === null || item.previous === null || item.previous === 0 ? null : ((item.cost - item.previous) / item.previous) * 100; return `<tr><td>${escapeShippingText(item.warehouse)}</td><td><strong>${costText(item.current)}</strong></td><td>${item.previousVersion ? costText(item.previousVersion) : '—'}</td><td class="${change > 0 ? 'negative' : 'positive'}">${change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`}</td><td>${escapeShippingText(item.updatedAt || '—')}</td><td>${escapeShippingText(item.logistics)}</td></tr>`; }).join('') : '<tr><td colspan="6">暂无已生效的仓库代发成本</td></tr>';
 }
 document.querySelector('#shippingSearch')?.addEventListener('click', renderShippingCosts);
 const shippingHistoryDialog = document.createElement('dialog');
 shippingHistoryDialog.className = 'shipping-history-dialog';
-shippingHistoryDialog.innerHTML = '<button class="dialog-close" type="button" id="closeShippingHistory">×</button><h2>代发费用修改记录</h2><p>以下为只读历史版本，不展示修改人及管理操作细节。</p><table><thead><tr><th>仓库</th><th>原代发费用</th><th>新代发费用</th><th>涨幅</th><th>对应物流</th><th>生效日期</th><th>备注</th></tr></thead><tbody id="shippingHistoryBody"></tbody></table></dialog>';
+shippingHistoryDialog.innerHTML = '<button class="dialog-close" type="button" id="closeShippingHistory">×</button><h2>代发费用修改记录</h2><p>以下为只读历史版本，不展示修改人及管理操作细节。</p><table><thead><tr><th>仓库</th><th>原代发费用</th><th>新代发费用</th><th>涨幅</th><th>生效日期</th><th>备注</th></tr></thead><tbody id="shippingHistoryBody"></tbody></table></dialog>';
 document.body.append(shippingHistoryDialog);
-document.querySelector('#shippingHistoryButton')?.addEventListener('click', () => { document.querySelector('#shippingHistoryBody').innerHTML = shippingCosts.map(item => { const oldCost = (item.previous - .3).toFixed(2); const change = ((item.previous - Number(oldCost)) / Number(oldCost) * 100).toFixed(1); return `<tr><td>${item.warehouse}</td><td>CNY ¥${oldCost}</td><td>CNY ¥${item.previous.toFixed(2)}</td><td>+${change}%</td><td>${item.logistics.join('、')}</td><td>2026-08-01</td><td>月度代发费用更新</td></tr>`; }).join(''); shippingHistoryDialog.showModal(); });
+document.querySelector('#shippingHistoryButton')?.addEventListener('click', () => { document.querySelector('#shippingHistoryBody').innerHTML = shippingCostHistory.length ? shippingCostHistory.map(item => { const before = item.previous; const change = !before || Number(before.amount) === 0 ? null : ((Number(item.current.amount) - Number(before.amount)) / Number(before.amount)) * 100; return `<tr><td>${escapeShippingText(item.warehouse)}</td><td>${before ? costText(before) : '—'}</td><td>${costText(item.current)}</td><td>${change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`}</td><td>${escapeShippingText(item.current.effective_date)}</td><td>${escapeShippingText(item.current.note || '—')}</td></tr>`; }).join('') : '<tr><td colspan="6">暂无已生效的费用版本记录</td></tr>'; shippingHistoryDialog.showModal(); });
 document.querySelector('#closeShippingHistory')?.addEventListener('click', () => shippingHistoryDialog.close());
 renderShippingCosts();
 
