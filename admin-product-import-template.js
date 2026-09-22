@@ -1,5 +1,5 @@
 (() => {
-  const template = '\uFEFFproduct_code,product_name,sale_price,image_url,status\r\n';
+  const template = '\uFEFFproduct_code,product_name,sale_price,effective_date,image_url,status\r\n';
 
   function downloadTemplate() {
     const link = document.createElement('a');
@@ -55,7 +55,7 @@
     const description = dialog.querySelector('h2')?.nextElementSibling;
     if (description?.tagName === 'P') description.textContent = '选择导入仓库后上传 CSV 或 Excel；系统按该仓库中的商品编码识别新增或更新。';
     const uploadHint = upload?.querySelector('small');
-    if (uploadHint) uploadHint.textContent = '英文表头：product_code、product_name、sale_price；可选 image_url、status。';
+    if (uploadHint) uploadHint.textContent = '英文表头：product_code、product_name、sale_price；可选 effective_date（YYYY-MM-DD，默认 2026-08-01）、image_url、status。';
     form.onsubmit = event => submitImport(event, dialog);
   }
 

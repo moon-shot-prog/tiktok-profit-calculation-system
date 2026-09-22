@@ -37,7 +37,9 @@
   const stateBadges = row => {
     const items = row.statusItems || [];
     if (!items.length) return '<span class="profit-tab-state ok">正常</span>';
-    return `<span class="profit-status-items">${items.map(item => `<span class="profit-tab-state ${item.code === '已取消未结算' ? 'neutral' : 'warn'}">${escapeHtml(item.label || item.code)}</span>`).join('')}</span>`;
+    return `<span class="profit-status-items">${items.map(item => item.code === '商品成本待补'
+      ? `<button class="profit-tab-state warn profit-status-export" type="button" data-profit-status-export="product_cost_missing" data-shop-id="${escapeHtml(row.shopId || '')}" title="导出当前筛选范围内的商品成本待补订单">${escapeHtml(item.label || item.code)}</button>`
+      : `<span class="profit-tab-state ${item.code === '已取消未结算' ? 'neutral' : 'warn'}">${escapeHtml(item.label || item.code)}</span>`).join('')}</span>`;
   };
   const warehouseCostExplanation = (row, allocated = false) => {
     const notes = [];
@@ -77,7 +79,7 @@
   dateFilter.addEventListener('change', () => dateControls.classList.toggle('is-hidden', dateFilter.value !== '自定义'));
 
   const style = document.createElement('style');
-  style.textContent = '.summary-custom-dates{display:flex;align-items:end;gap:7px}.summary-custom-dates input{height:36px;width:132px;border:1px solid #dfe6ef;border-radius:7px;background:#fff;padding:0 9px;color:#354158;font:12px inherit}.summary-custom-dates em{padding-bottom:10px;color:#7c899b;font-size:12px;font-style:normal}.profit-tab-actions{display:flex;gap:8px}.profit-tab-actions select,.profit-tab-actions button,.profit-product-filter input,.profit-product-filter select{height:34px;border:1px solid #dfe6ef;border-radius:6px;background:#fff;padding:0 9px;color:#526378;font:12px inherit}.profit-tab-actions button{color:#287fc5;cursor:pointer}.profit-tab-nav{display:flex;gap:18px;margin:18px 0 12px;border-bottom:1px solid #e8edf3}.profit-tab-nav button{position:relative;border:0;background:transparent;padding:9px 2px;color:#8490a2;font:12px inherit;cursor:pointer}.profit-tab-nav button.active{color:#287fc5;font-weight:700}.profit-tab-nav button.active:after{content:"";position:absolute;right:0;bottom:-1px;left:0;height:2px;background:#287fc5}.profit-product-filter{display:flex;gap:9px;margin-bottom:12px}.profit-product-filter input{width:230px}.profit-product-name{display:flex;align-items:center;gap:8px;max-width:230px;white-space:normal}.profit-product-name i{display:grid;place-items:center;width:30px;height:30px;background:#f3f7fa;border-radius:6px;font-style:normal}.profit-product-name span{overflow-wrap:anywhere}.summary-detail td small{display:block;margin-top:4px;color:#73859a}.profit-status-items{display:flex;flex-wrap:wrap;gap:4px}.profit-tab-state{display:inline-block;padding:4px 7px;border-radius:12px;font-size:10px;white-space:nowrap}.profit-tab-state.ok{background:#e8f8ef;color:#218f75}.profit-tab-state.warn{background:#fff4df;color:#b57820}.profit-tab-state.neutral{background:#edf2f7;color:#63748a}.profit-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.profit-detail-grid div{padding:10px;border-radius:8px;background:#f7fafc}.profit-detail-grid span,.profit-detail-grid b{display:block}.profit-detail-grid span{margin-bottom:3px;color:#73859a;font-size:12px}.profit-detail-grid b{color:#203656;font-size:14px}';
+  style.textContent = '.summary-custom-dates{display:flex;align-items:end;gap:7px}.summary-custom-dates input{height:36px;width:132px;border:1px solid #dfe6ef;border-radius:7px;background:#fff;padding:0 9px;color:#354158;font:12px inherit}.summary-custom-dates em{padding-bottom:10px;color:#7c899b;font-size:12px;font-style:normal}.profit-tab-actions{display:flex;gap:8px}.profit-tab-actions select,.profit-tab-actions button,.profit-product-filter input,.profit-product-filter select{height:34px;border:1px solid #dfe6ef;border-radius:6px;background:#fff;padding:0 9px;color:#526378;font:12px inherit}.profit-tab-actions button{color:#287fc5;cursor:pointer}.profit-tab-nav{display:flex;gap:18px;margin:18px 0 12px;border-bottom:1px solid #e8edf3}.profit-tab-nav button{position:relative;border:0;background:transparent;padding:9px 2px;color:#8490a2;font:12px inherit;cursor:pointer}.profit-tab-nav button.active{color:#287fc5;font-weight:700}.profit-tab-nav button.active:after{content:"";position:absolute;right:0;bottom:-1px;left:0;height:2px;background:#287fc5}.profit-product-filter{display:flex;gap:9px;margin-bottom:12px}.profit-product-filter input{width:230px}.profit-product-name{display:flex;align-items:center;gap:8px;max-width:230px;white-space:normal}.profit-product-name i{display:grid;place-items:center;width:30px;height:30px;background:#f3f7fa;border-radius:6px;font-style:normal}.profit-product-name span{overflow-wrap:anywhere}.summary-detail td small{display:block;margin-top:4px;color:#73859a}.profit-status-items{display:flex;flex-wrap:wrap;gap:4px}.profit-tab-state{display:inline-block;padding:4px 7px;border-radius:12px;font-size:10px;white-space:nowrap}.profit-tab-state.ok{background:#e8f8ef;color:#218f75}.profit-tab-state.warn{background:#fff4df;color:#b57820}.profit-tab-state.neutral{background:#edf2f7;color:#63748a}.profit-status-export{border:0;cursor:pointer}.profit-status-export:hover{text-decoration:underline}.profit-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.profit-detail-grid div{padding:10px;border-radius:8px;background:#f7fafc}.profit-detail-grid span,.profit-detail-grid b{display:block}.profit-detail-grid span{margin-bottom:3px;color:#73859a;font-size:12px}.profit-detail-grid b{color:#203656;font-size:14px}';
   document.head.append(style);
 
   function selectedRange() {
@@ -143,6 +145,21 @@
     $('#profitDetailDialog').showModal();
   }
 
+  async function exportProductCostMissing(shopId = '') {
+    const params = new URLSearchParams({ ...reportRange, currency: reportCurrency, rateType: $('#summaryRateTypeFilter').value || 'settlement', export: 'product_cost_missing', ...(shopId ? { shopId } : {}), ...(!shopId && $('#summaryShopFilter').value ? { shopId: $('#summaryShopFilter').value } : {}), ...($('#summaryCountryFilter').value ? { site: $('#summaryCountryFilter').value } : {}) });
+    const response = await fetch(`/api/business/dashboard-overview?${params}`, { headers: headers() });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || '导出商品成本待补订单失败');
+    }
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `商品成本待补_${reportRange.start}_至_${reportRange.end}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   async function loadLiveData(force = false) {
     try {
       const range = selectedRange();
@@ -197,7 +214,11 @@
   $('#profitTabSort').addEventListener('change', renderRows);
   $('#profitProductKeyword').addEventListener('input', renderRows);
   $('#profitProductState').addEventListener('change', renderRows);
-  card.addEventListener('click', event => { const button = event.target.closest('.detail-button'); if (button) showDetail(button.dataset.view, button.dataset.key); });
+  card.addEventListener('click', event => {
+    const exportButton = event.target.closest('[data-profit-status-export="product_cost_missing"]');
+    if (exportButton) { exportProductCostMissing(exportButton.dataset.shopId).catch(error => window.alert(error.message)); return; }
+    const button = event.target.closest('.detail-button'); if (button) showDetail(button.dataset.view, button.dataset.key);
+  });
   $('#closeProfitDetail').addEventListener('click', () => $('#profitDetailDialog').close());
   $('#summaryAlertTrigger')?.addEventListener('click', () => {
     $('#profitDetailContent').innerHTML = '<h2>检测预警</h2><p>暂未开放，待前后端交互和预警规则接入后开放使用。</p>';

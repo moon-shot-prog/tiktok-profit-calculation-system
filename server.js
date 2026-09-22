@@ -67,7 +67,7 @@ async function refreshRates(quote) {
   inFlight.set(quote, pending);
   try { return await pending; } finally { inFlight.delete(quote); }
 }
-function sendJson(response, status, data) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); response.end(JSON.stringify(data)); }
+function sendJson(response, status, data) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store, max-age=0' }); response.end(JSON.stringify(data)); }
 function readJson(request) {
   return new Promise((resolve, reject) => {
     let body = ''; let tooLarge = false;
@@ -207,6 +207,28 @@ function normaliseImageUrl(value) {
     return url.toString();
   } catch {
     throw new Error('商品图片链接必须以 http:// 或 https:// 开头');
+  }
+}
+async function handleSessionRefresh(request, response) {
+  if (!authClient) return sendJson(response, 503, { message: 'Supabase 配置不完整，请检查 .env' });
+  try {
+    const { refreshToken } = await readJson(request);
+    if (!refreshToken || typeof refreshToken !== 'string') return sendJson(response, 401, { message: '登录状态已失效' });
+    // Supabase refresh tokens rotate.  Always return and persist the complete
+    // replacement session, rather than reusing the old refresh token.
+    const { data, error } = await authClient.auth.refreshSession({ refresh_token: refreshToken });
+    if (error || !data.session || !data.user) return sendJson(response, 401, { message: '登录状态已失效' });
+    const identityData = await getAuthenticatedProfile(data.session.access_token);
+    if (!identityData.primaryRole) return sendJson(response, 403, { message: '该账号尚未分配系统角色' });
+    return sendJson(response, 200, {
+      user: { id: data.user.id, email: data.user.email, phone: data.user.phone, displayName: identityData.profile.display_name || data.user.email || data.user.phone },
+      roles: identityData.roles,
+      primaryRole: identityData.primaryRole,
+      session: { accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: data.session.expires_at }
+    });
+  } catch (error) {
+    if (error.message === 'ACCOUNT_DISABLED') return sendJson(response, 403, { message: '该账号已被停用，请联系管理员' });
+    return sendJson(response, 401, { message: '登录状态已失效' });
   }
 }
 function settlementRatePayload(body) {
@@ -1058,18 +1080,21 @@ async function updateWarehouse(request, response) {
 async function listProductManagementData(request, response) {
   try {
     await requireAdministrator(request);
-    const [{ data: products, error: productsError }, { data: warehouses, error: warehousesError }] = await Promise.all([
+    const [{ data: products, error: productsError }, { data: warehouses, error: warehousesError }, { data: costVersions, error: costVersionsError }] = await Promise.all([
       adminClient.from('products').select('id, warehouse_id, product_code, product_name, image_url, sale_price, currency_code, status, created_at, updated_at').order('updated_at', { ascending: false }),
-      adminClient.from('warehouses').select('id, name, country_code, is_active').order('name')
+      adminClient.from('warehouses').select('id, name, country_code, is_active').order('name'),
+      adminClient.from('product_cost_versions').select('id, product_id, effective_date, created_at').order('effective_date', { ascending: false }).order('created_at', { ascending: false })
     ]);
-    if (productsError || warehousesError) throw new Error('读取商品管理数据失败');
-    sendJson(response, 200, { products, warehouses });
+    if (productsError || warehousesError || costVersionsError) throw new Error('读取商品管理数据失败');
+    const latestCostVersionByProduct = new Map();
+    (costVersions || []).forEach(version => { if (!latestCostVersionByProduct.has(version.product_id)) latestCostVersionByProduct.set(version.product_id, version); });
+    sendJson(response, 200, { products: (products || []).map(product => ({ ...product, effective_date: latestCostVersionByProduct.get(product.id)?.effective_date || null })), warehouses });
   } catch (error) { adminError(response, error); }
 }
 function productCostEffectiveDate(value) {
   const date = String(value || '').trim();
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('商品成本生效日期格式无效');
-  return date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+  return date || '2026-08-01';
 }
 async function appendProductCostVersion(product, effectiveDate, actorId) {
   const { error } = await adminClient.from('product_cost_versions').insert({
@@ -1178,16 +1203,19 @@ async function importProducts(request, response) {
       const name = String(row.product_name || '').trim(); const price = productImportPrice(row.sale_price);
       const status = productImportStatus(row.status); const identity = `${warehouse.id}::${code}`;
       const rowNumber = row._rowNumber || index + 2;
-      if (!code || !name || code.length > 100 || name.length > 200 || !Number.isFinite(price) || price < 0 || !status) {
+      let effectiveDate = ''; let effectiveDateError = '';
+      try { effectiveDate = productCostEffectiveDate(row.effective_date || row.effectiveDate); } catch (error) { effectiveDateError = error.message; }
+      if (!code || !name || code.length > 100 || name.length > 200 || !Number.isFinite(price) || price < 0 || !status || effectiveDateError) {
         const invalidFields = [];
         if (!code || code.length > 100) invalidFields.push('product_code');
         if (!name || name.length > 200) invalidFields.push('product_name');
         if (!Number.isFinite(price) || price < 0) invalidFields.push('sale_price（仅支持数字或 CNY/¥ 金额）');
         if (!status) invalidFields.push('status（可留空，或填写可用/待审核/已驳回/已停用）');
+        if (effectiveDateError) invalidFields.push('effective_date（格式为 YYYY-MM-DD）');
         failures.push({ row: rowNumber, reason: `请填写有效 ${invalidFields.join('、')}` });
       }
       else {
-        const payload = { warehouse_id: warehouse.id, product_code: code, product_name: name, sale_price: price, currency_code: 'CNY', image_url: String(row.image_url || '').trim() || null, status };
+        const payload = { warehouse_id: warehouse.id, product_code: code, product_name: name, sale_price: price, currency_code: 'CNY', image_url: String(row.image_url || '').trim() || null, status, effective_date: effectiveDate };
         const previousIndex = payloadIndexByIdentity.get(identity);
         if (previousIndex !== undefined) {
           // 文件内相同编码按最后一条数据为准，保留审计信息供预览提示。
@@ -1203,22 +1231,39 @@ async function importProducts(request, response) {
     const { data: current, error: currentError } = await adminClient.from('products').select('id,warehouse_id,product_code,sale_price,currency_code').in('warehouse_id', [...new Set(payloads.map(item => item.warehouse_id))]);
     if (currentError) throw currentError;
     const currentByIdentity = new Map((current || []).map(item => [`${item.warehouse_id}::${item.product_code}`, item]));
+    const currentProductIds = (current || []).map(item => item.id);
+    const { data: currentVersions, error: currentVersionsError } = currentProductIds.length
+      ? await adminClient.from('product_cost_versions').select('id,product_id,effective_date,created_at').in('product_id', currentProductIds).order('effective_date', { ascending: false }).order('created_at', { ascending: false })
+      : { data: [], error: null };
+    if (currentVersionsError) throw new Error('读取现有商品成本版本失败');
+    const latestVersionByProduct = new Map();
+    (currentVersions || []).forEach(version => { if (!latestVersionByProduct.has(version.product_id)) latestVersionByProduct.set(version.product_id, version); });
     const inserts = payloads.filter(item => !currentByIdentity.has(`${item.warehouse_id}::${item.product_code}`));
     const updates = payloads.filter(item => currentByIdentity.has(`${item.warehouse_id}::${item.product_code}`));
     const costChangedUpdates = updates.filter(item => {
       const currentProduct = currentByIdentity.get(`${item.warehouse_id}::${item.product_code}`);
       return Number(currentProduct?.sale_price) !== Number(item.sale_price) || currentProduct?.currency_code !== item.currency_code;
     });
-    const summary = { valid: true, sourceRows: rows.length, totalRows: payloads.length, duplicateCount: duplicateRows.length, duplicateRows: duplicateRows.slice(0, 20), insertCount: inserts.length, updateCount: updates.length };
+    const effectiveDateOnlyUpdates = updates.filter(item => {
+      const currentProduct = currentByIdentity.get(`${item.warehouse_id}::${item.product_code}`);
+      const latestVersion = latestVersionByProduct.get(currentProduct?.id);
+      return !costChangedUpdates.includes(item) && latestVersion && latestVersion.effective_date !== item.effective_date;
+    });
+    const missingVersionUpdates = updates.filter(item => !latestVersionByProduct.has(currentByIdentity.get(`${item.warehouse_id}::${item.product_code}`)?.id));
+    const summary = { valid: true, sourceRows: rows.length, totalRows: payloads.length, duplicateCount: duplicateRows.length, duplicateRows: duplicateRows.slice(0, 20), insertCount: inserts.length, updateCount: updates.length, effectiveDateUpdateCount: effectiveDateOnlyUpdates.length };
     if (mode === 'preview') return sendJson(response, 200, summary);
-    for (let index = 0; index < inserts.length; index += 200) { const { error } = await adminClient.from('products').insert(inserts.slice(index, index + 200).map(({ _rowNumber, ...item }) => ({ ...item, created_by: actor.id }))); if (error) throw error; }
-    for (let index = 0; index < updates.length; index += 100) await Promise.all(updates.slice(index, index + 100).map(({ _rowNumber, ...item }) => adminClient.from('products').update(item).eq('id', currentByIdentity.get(`${item.warehouse_id}::${item.product_code}`).id).then(({ error }) => { if (error) throw error; })));
-    const costVersionCodes = [...new Set([...inserts, ...costChangedUpdates].map(item => item.product_code))];
+    for (let index = 0; index < inserts.length; index += 200) { const { error } = await adminClient.from('products').insert(inserts.slice(index, index + 200).map(({ _rowNumber, effective_date, ...item }) => ({ ...item, created_by: actor.id }))); if (error) throw error; }
+    for (let index = 0; index < updates.length; index += 100) await Promise.all(updates.slice(index, index + 100).map(({ _rowNumber, effective_date, ...item }) => adminClient.from('products').update(item).eq('id', currentByIdentity.get(`${item.warehouse_id}::${item.product_code}`).id).then(({ error }) => { if (error) throw error; })));
+    for (let index = 0; index < effectiveDateOnlyUpdates.length; index += 100) await Promise.all(effectiveDateOnlyUpdates.slice(index, index + 100).map(item => {
+      const currentProduct = currentByIdentity.get(`${item.warehouse_id}::${item.product_code}`); const version = latestVersionByProduct.get(currentProduct?.id);
+      return adminClient.from('product_cost_versions').update({ effective_date: item.effective_date }).eq('id', version.id).then(({ error }) => { if (error) throw error; });
+    }));
+    const costVersionCodes = [...new Set([...inserts, ...costChangedUpdates, ...missingVersionUpdates].map(item => item.product_code))];
     if (costVersionCodes.length) {
       const { data: versionedProducts, error: versionedProductsError } = await adminClient.from('products').select('id,warehouse_id,product_code,sale_price,currency_code').eq('warehouse_id', warehouse.id).in('product_code', costVersionCodes);
       if (versionedProductsError) throw new Error('读取导入后的商品成本资料失败');
-      const effectiveDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
-      const { error: versionError } = await adminClient.from('product_cost_versions').insert((versionedProducts || []).map(product => ({ product_id: product.id, warehouse_id: product.warehouse_id, product_code: product.product_code, amount: product.sale_price, currency_code: product.currency_code, effective_date: effectiveDate, created_by: actor.id })));
+      const importByIdentity = new Map(payloads.map(item => [`${item.warehouse_id}::${item.product_code}`, item]));
+      const { error: versionError } = await adminClient.from('product_cost_versions').insert((versionedProducts || []).map(product => ({ product_id: product.id, warehouse_id: product.warehouse_id, product_code: product.product_code, amount: product.sale_price, currency_code: product.currency_code, effective_date: importByIdentity.get(`${product.warehouse_id}::${product.product_code}`)?.effective_date || '2026-08-01', created_by: actor.id })));
       if (versionError) throw new Error('保存导入商品成本版本失败');
     }
     dashboardOverviewCache.clear();
@@ -1239,16 +1284,23 @@ async function updateProduct(request, response) {
     const effectiveDate = productCostEffectiveDate(body.effectiveDate);
     const imageUrl = normaliseImageUrl(body.imageUrl);
     if (!/^[0-9a-f-]{36}$/i.test(productId) || !/^[0-9a-f-]{36}$/i.test(warehouseId) || !productCode || productCode.length > 100 || !productName || productName.length > 200 || !Number.isFinite(salePrice) || salePrice < 0 || currencyCode !== 'CNY' || !['pending_review', 'approved', 'rejected', 'disabled'].includes(status)) throw new Error('请完整填写商品编码、名称、人民币单价、仓库和状态');
-    const [{ data: before, error: findError }, { data: warehouse, error: warehouseError }] = await Promise.all([
+    const [{ data: before, error: findError }, { data: warehouse, error: warehouseError }, { data: latestVersion, error: latestVersionError }] = await Promise.all([
       adminClient.from('products').select('id, warehouse_id, product_code, product_name, sale_price, currency_code, status').eq('id', productId).single(),
-      adminClient.from('warehouses').select('id').eq('id', warehouseId).eq('is_active', true).maybeSingle()
+      adminClient.from('warehouses').select('id').eq('id', warehouseId).eq('is_active', true).maybeSingle(),
+      adminClient.from('product_cost_versions').select('id,effective_date').eq('product_id', productId).order('effective_date', { ascending: false }).order('created_at', { ascending: false }).limit(1).maybeSingle()
     ]);
     if (findError || !before) throw new Error('未找到该商品');
     if (warehouseError || !warehouse) throw new Error('请选择启用中的仓库');
+    if (latestVersionError) throw new Error('读取商品成本版本失败');
     const reviewData = ['approved', 'rejected'].includes(status) ? { reviewed_by: actor.id, reviewed_at: new Date().toISOString() } : { reviewed_by: null, reviewed_at: null };
     const { data, error } = await adminClient.from('products').update({ warehouse_id: warehouseId, product_code: productCode, product_name: productName, image_url: imageUrl, sale_price: salePrice, currency_code: currencyCode, status, ...reviewData }).eq('id', productId).select().single();
     if (error) throw new Error(error.code === '23505' ? '该仓库中已存在相同商品编码' : '保存商品失败');
-    if (before.warehouse_id !== warehouseId || before.product_code !== productCode || Number(before.sale_price) !== salePrice || before.currency_code !== currencyCode) await appendProductCostVersion(data, effectiveDate, actor.id);
+    const costIdentityChanged = before.warehouse_id !== warehouseId || before.product_code !== productCode || Number(before.sale_price) !== salePrice || before.currency_code !== currencyCode;
+    if (costIdentityChanged || !latestVersion) await appendProductCostVersion(data, effectiveDate, actor.id);
+    else if (latestVersion.effective_date !== effectiveDate) {
+      const { error: effectiveDateError } = await adminClient.from('product_cost_versions').update({ effective_date: effectiveDate }).eq('id', latestVersion.id);
+      if (effectiveDateError) throw new Error('修改商品成本生效日期失败');
+    }
     await writeAudit(actor.id, 'product', productId, 'update', before, data);
     dashboardOverviewCache.clear();
     sendJson(response, 200, { product: data });
@@ -1489,9 +1541,10 @@ async function listBusinessDashboardOverview(request, response) {
     if ((new Date(`${end}T00:00:00Z`) - new Date(`${start}T00:00:00Z`)) / 86400000 + 1 > 90) throw new Error('自定义时间范围最多 90 天，超过请使用导出报表');
     const forceRefresh = requestUrl.searchParams.get('refresh') === 'true';
     const lightweightDashboard = requestUrl.searchParams.get('view') === 'dashboard';
+    const exportProductCostMissing = requestUrl.searchParams.get('export') === 'product_cost_missing';
     const cacheKey = `${identity.profile.id}:${String(requestUrl.searchParams.get('shopId') || '') || 'all'}:${requestedSite || 'all'}:${start}:${end}:${reportCurrency}:${rateType}:${lightweightDashboard ? 'dashboard' : 'detail'}`;
     const cached = dashboardOverviewCache.get(cacheKey);
-    if (!forceRefresh && cached && Date.now() - cached.createdAt < DASHBOARD_OVERVIEW_CACHE_TTL) return sendJson(response, 200, cached.data);
+    if (!exportProductCostMissing && !forceRefresh && cached && Date.now() - cached.createdAt < DASHBOARD_OVERVIEW_CACHE_TTL) return sendJson(response, 200, cached.data);
     const [{ data: permissions, error: permissionsError }, { data: rates, error: ratesError }] = await Promise.all([
       adminClient.from('user_shop_permissions').select('shop_id').eq('user_id', identity.profile.id),
       rateType === 'settlement'
@@ -1530,7 +1583,7 @@ async function listBusinessDashboardOverview(request, response) {
         warehouseShopIds.set(link.warehouse_id, shopIds);
       });
       const warehouseResult = allowedWarehouseIds.length
-        ? await adminClient.from('warehouses').select('id, original_warehouse_name, delivery_option, shipping_provider_name').eq('is_active', true).in('id', allowedWarehouseIds)
+        ? await adminClient.from('warehouses').select('id, name, original_warehouse_name, delivery_option, shipping_provider_name').eq('is_active', true).in('id', allowedWarehouseIds)
         : { data: [], error: null };
       if (warehouseResult.error) throw new Error('读取仓库代发成本匹配资料失败');
       fulfillmentWarehouses = warehouseResult.data || [];
@@ -1798,6 +1851,7 @@ async function listBusinessDashboardOverview(request, response) {
       return { amount: Number(converted), status: 'charged', product, productCode, version };
     };
     const storeProfitMap = new Map();
+    const productCostMissingExports = [];
     profitOrders.forEach((order, key) => {
       const chosenBills = selectedBillsByOrder.get(key) || [];
       const totals = billTotals(chosenBills, order);
@@ -1820,6 +1874,26 @@ async function listBusinessDashboardOverview(request, response) {
         const lineKey = String(item.id || `${key}:${itemIndex}`);
         const productCostResult = productCostFor(order, item);
         const productCode = String(productCostResult.productCode || item.seller_sku || item.product_code || '').trim();
+        if (productCostResult.status === 'product_missing') {
+          const matchedWarehouse = fulfillmentWarehouses.find(warehouse => warehouse.id === order.matchedWarehouseId);
+          productCostMissingExports.push({
+            shop: order.shop,
+            site: order.site,
+            orderedAt: order.date,
+            orderNumber: order.number,
+            trackingNumber: order.trackingNumber,
+            orderStatus: order.orderStatus,
+            skuId: item.sku_id || '',
+            productCode,
+            productName: item.product_name || '',
+            quantity: item.quantity || '',
+            warehouseName: order.warehouseName,
+            deliveryOption: order.deliveryOption,
+            shippingProviderName: order.shippingProviderName,
+            matchedWarehouse: matchedWarehouse?.name || '',
+            reason: '商品管理中未找到“匹配仓库 + 商品编码”的可用商品成本'
+          });
+        }
         const sku = String(item.sku_id || productCode || item.product_name || 'no-sku');
         const productKey = `${order.shopId}::${sku}`;
         const product = profitProducts.get(productKey) || { shopId: order.shopId, shop: order.shop, site: order.site, code: productCode || '—', sku: item.sku_id || '—', name: productCostResult.product?.product_name || productNameByCode.get(productCode) || '—', qty: 0, orderKeys: new Set(), refunds: new Set(), appliedBillIds: new Set(), missingSettlementOrderKeys: new Set(), cancelledUnsettledOrderKeys: new Set(), sales: 0, settlement: 0, platform: 0, promotion: 0, productCost: 0, warehouseCost: 0, missingRate: false };
@@ -1895,6 +1969,14 @@ async function listBusinessDashboardOverview(request, response) {
     const profitReport = { stores: [...storeProfitMap.values()].map(normalizeStore).sort((a, b) => b.sales - a.sales), products: [...profitProducts.values()].map(normalizeProduct).sort((a, b) => b.sales - a.sales) };
     const data = buildDashboardData(profitReport);
     dashboardOverviewCache.set(cacheKey, { createdAt: Date.now(), data });
+    if (exportProductCostMissing) {
+      const header = ['店铺', '国家站点', '下单日期', '订单 ID', 'Tracking ID', '订单状态', 'SKU ID', '商品编码', '订单商品名称', '数量', '订单 Warehouse Name', '订单 Delivery Option', '订单 Shipping Provider Name', '已匹配仓库', '待补原因'];
+      const rows = productCostMissingExports.map(item => [item.shop, item.site, item.orderedAt, item.orderNumber, item.trackingNumber, item.orderStatus, item.skuId, item.productCode, item.productName, item.quantity, item.warehouseName, item.deliveryOption, item.shippingProviderName, item.matchedWarehouse, item.reason]);
+      const csv = [header, ...rows].map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="product-cost-missing_${start}_to_${end}.csv"`, 'Cache-Control': 'no-store, max-age=0' });
+      response.end(`\uFEFF${csv}`);
+      return;
+    }
     sendJson(response, 200, data);
   } catch (error) { adminError(response, error); }
 }
@@ -2171,7 +2253,11 @@ function serveFile(request, response) {
   const filePath = path.join(__dirname, requested);
   if (!filePath.startsWith(__dirname) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) { response.writeHead(404); return response.end('Not found'); }
   const type = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8' }[path.extname(filePath)] || 'application/octet-stream';
-  response.writeHead(200, { 'Content-Type': type }); fs.createReadStream(filePath).pipe(response);
+  const extension = path.extname(filePath);
+  // HTML must always be revalidated so it can reference the latest versioned client bundles.
+  // API responses are separately marked no-store in sendJson.
+  const cacheControl = extension === '.html' ? 'no-cache, max-age=0, must-revalidate' : 'public, max-age=31536000, immutable';
+  response.writeHead(200, { 'Content-Type': type, 'Cache-Control': cacheControl }); fs.createReadStream(filePath).pipe(response);
 }
 http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
@@ -2182,6 +2268,7 @@ http.createServer(async (request, response) => {
   if (url.pathname === '/api/auth/login' && request.method === 'POST') return handleLogin(request, response);
   if (url.pathname === '/api/auth/password-reset' && request.method === 'POST') return handlePasswordReset(request, response);
   if (url.pathname === '/api/auth/session' && request.method === 'POST') return handleSession(request, response);
+  if (url.pathname === '/api/auth/refresh' && request.method === 'POST') return handleSessionRefresh(request, response);
   if (url.pathname === '/api/admin/data' && request.method === 'GET') return listAdminData(request, response);
   if (url.pathname === '/api/admin/shops' && request.method === 'GET') return listShopManagementData(request, response);
   if (url.pathname === '/api/admin/shops' && request.method === 'POST') return createShop(request, response);

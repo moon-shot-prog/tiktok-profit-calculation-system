@@ -3,7 +3,7 @@
   if (!page) return;
   const session = () => { try { return JSON.parse(localStorage.getItem('tiktokShopAuthSession') || sessionStorage.getItem('tiktokShopAuthSession') || '{}'); } catch { return {}; } };
   const escape = value => String(value ?? '—').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
-  const api = async path => { const response = await fetch(path, { headers: { Authorization: `Bearer ${session().accessToken || ''}` } }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.message || '读取已结算账单失败'); return data; };
+  const api = async path => { const response = window.tiktokAuth?.fetch ? await window.tiktokAuth.fetch(path) : await fetch(path, { headers: { Authorization: `Bearer ${session().accessToken || ''}` } }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.message || '读取已结算账单失败'); return data; };
   let rows = [], shops = [], pageNo = 1, pageSize = 20, meta = { totalRows: 0, totalPages: 1 };
   let latestLoad = 0;
   const CACHE_TTL = 3 * 60 * 1000;

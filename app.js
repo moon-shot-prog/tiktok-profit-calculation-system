@@ -47,15 +47,54 @@ function enterWorkspace(role, user) {
 async function requestJson(url, body) {
   const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || '请求失败，请稍后再试');
+  if (!response.ok) { const error = new Error(data.message || '请求失败，请稍后再试'); error.status = response.status; throw error; }
   return data;
+}
+function authSessionStorage() {
+  if (localStorage.getItem(AUTH_SESSION_KEY)) return localStorage;
+  if (sessionStorage.getItem(AUTH_SESSION_KEY)) return sessionStorage;
+  return null;
+}
+function readAuthSession() {
+  const storage = authSessionStorage();
+  if (!storage) return null;
+  try { return JSON.parse(storage.getItem(AUTH_SESSION_KEY) || 'null'); } catch { return null; }
+}
+function clearAuthSession() {
+  localStorage.removeItem(AUTH_SESSION_KEY);
+  sessionStorage.removeItem(AUTH_SESSION_KEY);
 }
 function storeAuthSession(session) {
   const target = rememberMe.checked ? localStorage : sessionStorage;
-  localStorage.removeItem(AUTH_SESSION_KEY);
-  sessionStorage.removeItem(AUTH_SESSION_KEY);
+  clearAuthSession();
   target.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
 }
+let refreshSessionPromise = null;
+async function refreshAuthSession() {
+  if (refreshSessionPromise) return refreshSessionPromise;
+  const storage = authSessionStorage(); const current = readAuthSession();
+  if (!storage || !current?.refreshToken) { const error = new Error('登录状态已失效，请重新登录'); error.status = 401; throw error; }
+  refreshSessionPromise = requestJson('/api/auth/refresh', { refreshToken: current.refreshToken })
+    .then(result => {
+      const refreshed = { ...current, ...result.session, primaryRole: result.primaryRole, user: result.user };
+      storage.setItem(AUTH_SESSION_KEY, JSON.stringify(refreshed));
+      return refreshed;
+    })
+    .finally(() => { refreshSessionPromise = null; });
+  return refreshSessionPromise;
+}
+async function authenticatedFetch(url, options = {}) {
+  const send = async session => {
+    const headers = new Headers(options.headers || {});
+    headers.set('Authorization', `Bearer ${session?.accessToken || ''}`);
+    return fetch(url, { ...options, headers });
+  };
+  let response = await send(readAuthSession());
+  if (response.status !== 401) return response;
+  try { response = await send(await refreshAuthSession()); } catch { /* Preserve the original 401 for the caller to render. */ }
+  return response;
+}
+window.tiktokAuth = { getSession: readAuthSession, refreshSession: refreshAuthSession, fetch: authenticatedFetch };
 async function login() {
   if (location.protocol === 'file:') {
     formMessage.textContent = '请通过 http://localhost:3000 打开系统，不能直接双击 index.html 登录。';
@@ -108,7 +147,7 @@ dialogForm.addEventListener('submit', async event => {
 });
 document.querySelector('#inviteMember')?.addEventListener('click', () => window.alert('成员邀请将在管理后台接入 Supabase 后开放。当前请勿使用原型邀请链接。'));
 document.querySelectorAll('.logout').forEach(button => button.addEventListener('click', () => {
-  localStorage.removeItem(AUTH_SESSION_KEY); sessionStorage.removeItem(AUTH_SESSION_KEY);
+  clearAuthSession();
   adminWorkspace.classList.add('is-hidden'); salesWorkspace.classList.add('is-hidden'); loginPage.classList.remove('is-hidden'); password.value = '';
 }));
 document.querySelector('#enterBusinessWorkspace')?.addEventListener('click', () => {
@@ -126,14 +165,20 @@ document.querySelector('#enterAdminWorkspace')?.addEventListener('click', return
 document.querySelector('#returnAdminWorkspace')?.addEventListener('click', returnToAdminWorkspace);
 updateInitialization();
 if (location.protocol === 'file:') formMessage.textContent = '当前为文件预览模式。请在浏览器打开 http://localhost:3000 后登录。';
-const remembered = localStorage.getItem(AUTH_SESSION_KEY) || sessionStorage.getItem(AUTH_SESSION_KEY);
+const remembered = readAuthSession();
 if (remembered) {
-  try {
-    const saved = JSON.parse(remembered);
-    requestJson('/api/auth/session', { accessToken: saved.accessToken })
-      .then(result => enterWorkspace(result.primaryRole, result.user))
-      .catch(() => { localStorage.removeItem(AUTH_SESSION_KEY); sessionStorage.removeItem(AUTH_SESSION_KEY); });
-  } catch { localStorage.removeItem(AUTH_SESSION_KEY); sessionStorage.removeItem(AUTH_SESSION_KEY); }
+  requestJson('/api/auth/session', { accessToken: remembered.accessToken })
+    .then(result => enterWorkspace(result.primaryRole, result.user))
+    .catch(async error => {
+      // A stale access token is normal.  Refresh it once instead of forcing
+      // users of protected order and settlement pages to log in again.
+      if (error.status === 401) {
+        try { const refreshed = await refreshAuthSession(); const result = await requestJson('/api/auth/session', { accessToken: refreshed.accessToken }); enterWorkspace(result.primaryRole, result.user); }
+        catch (refreshError) { if (refreshError.status === 401 || refreshError.status === 403) clearAuthSession(); }
+      }
+      // Do not erase a valid local session merely because the service or
+      // network has a short outage; the next protected request will retry it.
+    });
 }
 
 const notificationButton = document.querySelector('#notificationButton');
