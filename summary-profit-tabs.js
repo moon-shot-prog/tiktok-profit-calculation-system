@@ -32,7 +32,7 @@
   const isVisible = () => !page.classList.contains('is-hidden');
   const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
   const formatDate = value => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
-  const money = value => value === null || value === undefined || !Number.isFinite(Number(value)) ? '—' : `${reportCurrency} ${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const money = value => value === null || value === undefined || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const percent = value => value === null || value === undefined || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toFixed(2)}%`;
   const stateBadges = row => {
     const items = row.statusItems || [];
@@ -60,8 +60,16 @@
       <div class="profit-tab-actions"><select id="profitTabSort"><option value="profit">净利润从高到低</option><option value="sales">销售额从高到低</option><option value="margin">净利率从高到低</option><option value="refundRate">退款率从高到低</option></select><button id="profitTabExport" type="button">导出数据</button></div>
     </div>
     <nav class="profit-tab-nav"><button type="button" class="active" data-view="store">店铺利润</button><button type="button" data-view="product">商品利润</button></nav>
-    <section id="profitTabStore"><table><thead><tr><th>店铺 / 站点</th><th>有效订单</th><th>销售额</th><th>退款金额</th><th>平台费用</th><th>结算/预计金额</th><th>商品成本</th><th>仓库代发成本</th><th>推广费</th><th>净利润</th><th>净利率</th><th>退款率</th><th>数据状态</th><th>操作：详情</th></tr></thead><tbody id="profitTabStoreRows"></tbody></table></section>
-    <section id="profitTabProduct" class="is-hidden"><div class="profit-product-filter"><input id="profitProductKeyword" placeholder="商品编码 / SKU / 商品名称" /><select id="profitProductState"><option value="">全部利润状态</option><option value="结算未匹配">结算未匹配</option><option value="仓库配置未匹配">仓库配置未匹配</option><option value="仓库配置重复">仓库配置重复</option><option value="代发费用版本缺失">代发费用版本缺失</option><option value="代发费用汇率缺失">代发费用汇率缺失</option><option value="商品成本待补">商品成本待补</option><option value="汇率缺失">汇率缺失</option></select></div><table><thead><tr><th>商品</th><th>商品编码 / SKU ID</th><th>所属店铺</th><th>销售额</th><th>销量</th><th>有效订单</th><th>结算/预计金额</th><th>商品成本</th><th>仓库及运费成本</th><th>平台费用</th><th>推广费</th><th>退款数 / 退款率</th><th>净利润</th><th>净利率</th><th>数据状态</th><th>详情</th></tr></thead><tbody id="profitTabProductRows"></tbody></table></section>`;
+    <section id="profitTabStore"><table><thead><tr><th>店铺 / 站点</th><th>有效订单</th><th>销售额</th><th>退款金额</th><th>平台费用</th><th>结算/预计金额</th><th>商品成本</th><th>仓库代发成本</th><th>推广费</th><th>净利润</th><th>净利率</th><th>退款率</th><th>币种</th><th>数据状态</th><th>操作：详情</th></tr></thead><tbody id="profitTabStoreRows"></tbody></table></section>
+    <section id="profitTabProduct" class="is-hidden"><div class="profit-product-filter"><input id="profitProductKeyword" placeholder="商品编码 / SKU / 商品名称" /><select id="profitProductState"><option value="">全部利润状态</option><option value="结算未匹配">结算未匹配</option><option value="仓库配置未匹配">仓库配置未匹配</option><option value="仓库配置重复">仓库配置重复</option><option value="代发费用版本缺失">代发费用版本缺失</option><option value="代发费用汇率缺失">代发费用汇率缺失</option><option value="商品成本待补">商品成本待补</option><option value="汇率缺失">汇率缺失</option></select></div><table><thead><tr><th>商品</th><th>商品编码 / SKU ID</th><th>所属店铺</th><th>销售额</th><th>退款金额</th><th>销量</th><th>有效订单</th><th>结算/预计金额</th><th>商品成本</th><th>仓库及运费成本</th><th>平台费用</th><th>推广费</th><th>退款数 / 退款率</th><th>净利润</th><th>净利率</th><th>币种</th><th>数据状态</th><th>详情</th></tr></thead><tbody id="profitTabProductRows"></tbody></table></section>`;
+
+  const productTable = $('#profitTabProduct table');
+  if (productTable) {
+    const productScroll = document.createElement('div');
+    productScroll.className = 'profit-product-table-scroll';
+    productTable.before(productScroll);
+    productScroll.append(productTable);
+  }
 
   const dateFilter = $('#summaryDateFilter');
   $('#profitProductState')?.insertAdjacentHTML('beforeend', '<option value="商品仓库成本未匹配">商品仓库成本未匹配</option><option value="商品仓库成本匹配重复">商品仓库成本匹配重复</option><option value="商品编码缺失">商品编码缺失</option><option value="商品数量异常">商品数量异常</option><option value="商品成本版本缺失">商品成本版本缺失</option><option value="商品成本汇率缺失">商品成本汇率缺失</option><option value="商品成本非计费状态">商品成本非计费状态</option><option value="已取消未结算">已取消未结算</option>');
@@ -128,9 +136,9 @@
     const storeRows = sortRows(stores);
     const productRows = sortRows(filteredProducts());
     $('#profitTabStoreRows').innerHTML = storeRows.length ? storeRows.map(row => {
-      return `<tr><td>${escapeHtml(row.shop)}<small>${escapeHtml(row.site)}</small></td><td>${row.orders}</td><td>${money(row.sales)}</td><td>${money(row.refund)}</td><td>${money(row.platform)}</td><td>${money(row.settlement)}</td><td>${money(row.product)}</td><td>${money(row.warehouse)}</td><td>${money(row.promotion)}</td><td>${money(row.profit)}</td><td>${percent(row.margin)}</td><td>${percent(row.refundRate)}</td><td>${stateBadges(row)}</td><td><button class="detail-button" type="button" data-view="store" data-key="${escapeHtml(row.shopId)}">详情</button></td></tr>`;
-    }).join('') : '<tr><td colspan="14">暂无符合筛选条件的真实数据</td></tr>';
-    $('#profitTabProductRows').innerHTML = productRows.length ? productRows.map(row => `<tr><td><div class="profit-product-name"><i>◫</i><span>${escapeHtml(row.name)}</span></div></td><td>${escapeHtml(row.code)}<small>${escapeHtml(row.sku)}</small></td><td>${escapeHtml(row.shop)}</td><td>${money(row.sales)}</td><td>${row.qty}</td><td>${row.orders}</td><td>${money(row.settlement)}</td><td>${money(row.product)}</td><td>${money(row.warehouse)}</td><td>${money(row.platform)}</td><td>${money(row.promotion)}</td><td>${row.refunds} / ${percent(row.refundRate)}</td><td>${money(row.profit)}</td><td>${percent(row.margin)}</td><td>${stateBadges(row)}</td><td><button class="detail-button" type="button" data-view="product" data-key="${escapeHtml(dataKey(row))}">详情</button></td></tr>`).join('') : '<tr><td colspan="16">暂无符合筛选条件的真实数据</td></tr>';
+      return `<tr><td>${escapeHtml(row.shop)}<small>${escapeHtml(row.site)}</small></td><td>${row.orders}</td><td>${money(row.sales)}</td><td>${money(row.refund)}</td><td>${money(row.platform)}</td><td>${money(row.settlement)}</td><td>${money(row.product)}</td><td>${money(row.warehouse)}</td><td>${money(row.promotion)}</td><td>${money(row.profit)}</td><td>${percent(row.margin)}</td><td>${percent(row.refundRate)}</td><td>${escapeHtml(reportCurrency)}</td><td>${stateBadges(row)}</td><td><button class="detail-button" type="button" data-view="store" data-key="${escapeHtml(row.shopId)}">详情</button></td></tr>`;
+    }).join('') : '<tr><td colspan="15">暂无符合筛选条件的真实数据</td></tr>';
+    $('#profitTabProductRows').innerHTML = productRows.length ? productRows.map(row => `<tr><td><div class="profit-product-name"><i>◫</i><span>${escapeHtml(row.name)}</span></div></td><td>${escapeHtml(row.code)}<small>${escapeHtml(row.sku)}</small></td><td>${escapeHtml(row.shop)}</td><td>${money(row.sales)}</td><td>${money(row.refund)}</td><td>${row.qty}</td><td>${row.orders}</td><td>${money(row.settlement)}</td><td>${money(row.product)}</td><td>${money(row.warehouse)}</td><td>${money(row.platform)}</td><td>${money(row.promotion)}</td><td>${row.refunds} / ${percent(row.refundRate)}</td><td>${money(row.profit)}</td><td>${percent(row.margin)}</td><td>${escapeHtml(reportCurrency)}</td><td>${stateBadges(row)}</td><td><button class="detail-button" type="button" data-view="product" data-key="${escapeHtml(dataKey(row))}">详情</button></td></tr>`).join('') : '<tr><td colspan="18">暂无符合筛选条件的真实数据</td></tr>';
   }
 
   function showDetail(view, key) {
@@ -139,9 +147,9 @@
     const warehouseCostRule = '按订单的 Warehouse Name、Delivery Option、Shipping Provider Name 精确匹配已授权仓库；有 Tracking ID 的订单按运单去重计费，无 Tracking ID 时仅待发货订单参与预估，已取消且无运单订单取 0。';
     const warehouseCostDetail = warehouseCostExplanation(row, view === 'product');
     const fields = view === 'store'
-      ? [['店铺 / 站点', `${row.shop} · ${row.site}`], ['有效订单', row.orders], ['销售额', money(row.sales)], ['退款金额', money(row.refund)], ['平台费用', money(row.platform)], ['结算/预计金额', money(row.settlement)], ['商品成本', money(row.product)], ['仓库代发成本', money(row.warehouse)], ['仓库代发成本计费结果', warehouseCostDetail], ['仓库代发成本取值规则', warehouseCostRule], ['推广费', money(row.promotion)], ['净利润', money(row.profit)], ['净利率', percent(row.margin)], ['退款率', percent(row.refundRate)], ['数据状态', row.state]]
-      : [['商品名称', row.name], ['商品编码 / SKU', `${row.code} / ${row.sku}`], ['所属店铺', row.shop], ['销量', row.qty], ['有效订单', row.orders], ['销售额', money(row.sales)], ['退款数 / 退款率', `${row.refunds} / ${percent(row.refundRate)}`], ['结算/预计金额', money(row.settlement)], ['平台费用', money(row.platform)], ['推广费', money(row.promotion)], ['商品成本', money(row.product)], ['仓库及运费成本', money(row.warehouse)], ['仓库及运费成本计费结果', warehouseCostDetail], ['仓库及运费成本取值规则', warehouseCostRule], ['数据状态', row.state]];
-    $('#profitDetailContent').innerHTML = `<h2>${view === 'store' ? '店铺利润详情' : '商品利润详情'}</h2><p>统计区间：${escapeHtml(reportRange.start)} 至 ${escapeHtml(reportRange.end)} · ${escapeHtml(reportCurrency)}。数据来源为已授权店铺的订单、结算账单、仓库成本和汇率资料。</p><div class="profit-detail-grid">${fields.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`).join('')}</div>`;
+      ? [['店铺 / 站点', `${row.shop} · ${row.site}`], ['有效订单', row.orders], ['销售额', money(row.sales)], ['退款金额', money(row.refund)], ['平台费用', money(row.platform)], ['结算/预计金额', money(row.settlement)], ['商品成本', money(row.product)], ['仓库代发成本', money(row.warehouse)], ['仓库代发成本计费结果', warehouseCostDetail], ['仓库代发成本取值规则', warehouseCostRule], ['推广费', money(row.promotion)], ['总费用', money(row.totalCost)], ['净利润', money(row.profit)], ['净利率', percent(row.margin)], ['退款率', percent(row.refundRate)], ['数据状态', row.state]]
+      : [['商品名称', row.name], ['商品编码 / SKU', `${row.code} / ${row.sku}`], ['所属店铺', row.shop], ['销量', row.qty], ['有效订单', row.orders], ['销售额', money(row.sales)], ['退款金额', money(row.refund)], ['退款数 / 退款率', `${row.refunds} / ${percent(row.refundRate)}`], ['结算/预计金额', money(row.settlement)], ['平台费用', money(row.platform)], ['推广费', money(row.promotion)], ['商品成本', money(row.product)], ['仓库及运费成本', money(row.warehouse)], ['仓库及运费成本计费结果', warehouseCostDetail], ['仓库及运费成本取值规则', warehouseCostRule], ['数据状态', row.state]];
+    $('#profitDetailContent').innerHTML = `<h2>${view === 'store' ? '店铺利润详情' : '商品利润详情'}</h2><p>统计区间：${escapeHtml(reportRange.start)} 至 ${escapeHtml(reportRange.end)} · ${escapeHtml(reportCurrency)}。店铺推广费按推广管理中同店铺、同日期的费用归集；总费用 = 商品成本 + 仓库代发成本 + 推广费；净利润 = 结算/预计金额 − 总费用，净利率 = 净利润 ÷ 销售额。</p><div class="profit-detail-grid">${fields.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>`).join('')}</div>`;
     $('#profitDetailDialog').showModal();
   }
 
@@ -209,6 +217,7 @@
     activeView = view;
     $('#profitTabStore').classList.toggle('is-hidden', view !== 'store');
     $('#profitTabProduct').classList.toggle('is-hidden', view !== 'product');
+    page.classList.toggle('summary-product-fixed', view === 'product');
     document.querySelectorAll('.profit-tab-nav button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   });
   $('#profitTabSort').addEventListener('change', renderRows);
@@ -239,11 +248,11 @@
   $('#profitTabExport').addEventListener('click', () => {
     const rows = activeView === 'store' ? sortRows(stores) : sortRows(filteredProducts());
     const header = activeView === 'store'
-      ? ['店铺', '站点', '有效订单', '销售额', '退款金额', '平台费用', '结算/预计金额', '商品成本', '仓库代发成本', '推广费', '净利润', '净利率', '退款率', '数据状态']
-      : ['商品编码', 'SKU ID', '商品名称', '所属店铺', '销量', '有效订单', '销售额', '结算/预计金额', '商品成本', '仓库及运费成本', '平台费用', '推广费', '退款数', '退款率', '净利润', '净利率', '数据状态'];
+      ? ['店铺', '站点', '有效订单', '销售额', '退款金额', '平台费用', '结算/预计金额', '商品成本', '仓库代发成本', '推广费', '净利润', '净利率', '退款率', '币种', '数据状态']
+      : ['商品编码', 'SKU ID', '商品名称', '所属店铺', '销量', '有效订单', '销售额', '退款金额', '结算/预计金额', '商品成本', '仓库及运费成本', '平台费用', '推广费', '退款数', '退款率', '净利润', '净利率', '币种', '数据状态'];
     const body = rows.map(row => activeView === 'store'
-      ? [row.shop, row.site, row.orders, row.sales, row.refund, row.platform, row.settlement, row.product, row.warehouse, row.promotion, row.profit, row.margin, row.refundRate, row.state]
-      : [row.code, row.sku, row.name, row.shop, row.qty, row.orders, row.sales, row.settlement, row.product, row.warehouse, row.platform, row.promotion, row.refunds, row.refundRate, row.profit, row.margin, row.state]);
+      ? [row.shop, row.site, row.orders, row.sales, row.refund, row.platform, row.settlement, row.product, row.warehouse, row.promotion, row.profit, row.margin, row.refundRate, reportCurrency, row.state]
+      : [row.code, row.sku, row.name, row.shop, row.qty, row.orders, row.sales, row.refund, row.settlement, row.product, row.warehouse, row.platform, row.promotion, row.refunds, row.refundRate, row.profit, row.margin, reportCurrency, row.state]);
     const csv = [header, ...body].map(line => line.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));

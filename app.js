@@ -109,6 +109,7 @@ async function login() {
   try {
     const result = await requestJson('/api/auth/login', { identity, password: password.value });
     storeAuthSession({ ...result.session, primaryRole: result.primaryRole, user: result.user });
+    document.dispatchEvent(new CustomEvent('business:promotion-cache-reset'));
     enterWorkspace(result.primaryRole, result.user);
   } catch (error) {
     formMessage.textContent = error.message;
@@ -148,6 +149,7 @@ dialogForm.addEventListener('submit', async event => {
 document.querySelector('#inviteMember')?.addEventListener('click', () => window.alert('成员邀请将在管理后台接入 Supabase 后开放。当前请勿使用原型邀请链接。'));
 document.querySelectorAll('.logout').forEach(button => button.addEventListener('click', () => {
   clearAuthSession();
+  document.dispatchEvent(new CustomEvent('business:promotion-cache-reset'));
   adminWorkspace.classList.add('is-hidden'); salesWorkspace.classList.add('is-hidden'); loginPage.classList.remove('is-hidden'); password.value = '';
 }));
 document.querySelector('#enterBusinessWorkspace')?.addEventListener('click', () => {
@@ -217,11 +219,14 @@ const ordersPage = document.createElement('main');
 ordersPage.className = 'orders-page is-hidden'; ordersPage.id = 'ordersPage';
 ordersPage.innerHTML = '<div class="page-heading"><div><p class="eyebrow">ORDERS</p><h1>订单明细表</h1><p>按商品行展示多 SKU 订单的分摊实付金额。</p></div></div><section class="order-filters" id="orderFilters"></section><section class="order-table-card"><table><thead><tr><th>店铺</th><th>国家站点</th><th>订单 ID</th><th>商品编码</th><th>SKU ID</th><th>商品数量</th><th>分摊实付金额</th><th>订单状态</th><th>退款状态 / 金额</th><th>仓库名称</th><th>快递单号</th><th>配送选项</th><th>物流承运商</th><th>下单日期</th><th>发货日期</th><th>完结状态</th><th>订单更新时间</th><th>物流状态</th><th>利润数据</th><th>详情</th></tr></thead><tbody id="ordersBody"></tbody></table><div class="product-pagination"><span id="ordersTotal"></span><label>每页<select id="ordersPageSize"><option value="20">20 条/页</option><option value="50">50 条/页</option><option value="100">100 条/页</option></select></label><div><button id="previousOrderPage" type="button">上一页</button><span id="orderPages"></span><button id="nextOrderPage" type="button">下一页</button></div></div></section><section id="settlementPage" class="settlement-placeholder is-hidden">结算单管理将汇总已完结订单的结算状态、费用调整与结算版本；完整审核和调整流程后续由管理后台处理。</section>';
 document.querySelector('.profit-main')?.append(ordersPage);
+const businessPromotionsPage = document.createElement('main');
+businessPromotionsPage.className = 'business-promotions-page is-hidden'; businessPromotionsPage.id = 'businessPromotionsPage';
+document.querySelector('.profit-main')?.append(businessPromotionsPage);
 const ordersNav = document.querySelector('a[href="#orders"]');
 ordersNav?.setAttribute('id', 'ordersExpand'); ordersNav?.setAttribute('aria-expanded', 'false'); ordersNav?.insertAdjacentHTML('beforeend', '<b class="order-arrow">⌃</b>');
 ordersNav?.insertAdjacentHTML('afterend', '<div class="order-subnav is-hidden" id="orderSubnav"><button class="active" id="orderDetailNav">订单明细表</button><button id="settlementNav">结算单管理</button></div>');
 function hideSalesPages() {
-  [dashboardPage, currencyPage, productsPage, shippingPage, ordersPage, summaryPage, storesPage].forEach(page => page?.classList.add('is-hidden'));
+  [dashboardPage, currencyPage, productsPage, shippingPage, ordersPage, businessPromotionsPage, summaryPage, storesPage].forEach(page => page?.classList.add('is-hidden'));
 }
 function showCurrencyPage() {
   hideSalesPages();
@@ -272,6 +277,12 @@ function showOrdersPage(view = 'details') {
   document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#orders'));
   document.dispatchEvent(new CustomEvent('sales:navigate', { detail: { route: '#orders', view } }));
 }
+function showBusinessPromotionsPage() {
+  hideSalesPages(); businessPromotionsPage.classList.remove('is-hidden');
+  document.querySelector('#topbarTitle').textContent = '推广管理'; document.querySelector('#reportCurrency').classList.add('is-hidden'); document.querySelector('#topbarSubtitle').textContent = '查看已授权店铺的推广费用、订单与收入数据（只读）'; document.querySelector('#topbarSubtitle').classList.remove('is-hidden'); document.querySelector('#exchangeExpand')?.classList.remove('active');
+  document.querySelectorAll('.profit-nav a').forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#promotions'));
+  document.dispatchEvent(new CustomEvent('sales:navigate', { detail: { route: '#promotions' } }));
+}
 function navigateSalesPage(route) {
   if (route === '#summary' || route === '#shops') {
     hideSalesPages();
@@ -281,6 +292,7 @@ function navigateSalesPage(route) {
   if (route === '#dashboard') return showDashboardPage();
   if (route === '#currency') return showCurrencyPage();
   if (route === '#products') return showProductsPage();
+  if (route === '#promotions') return showBusinessPromotionsPage();
   if (route === '#shipping') {
     showShippingPage();
     const subnav = document.querySelector('.shipping-subnav');
@@ -302,7 +314,7 @@ function navigateSalesPage(route) {
 document.addEventListener('click', event => {
   const link = event.target.closest('a[href]');
   const route = link?.getAttribute('href');
-  if (!['#dashboard', '#summary', '#orders', '#products', '#shipping', '#currency', '#shops'].includes(route)) return;
+  if (!['#dashboard', '#summary', '#orders', '#promotions', '#products', '#shipping', '#currency', '#shops'].includes(route)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   navigateSalesPage(route);

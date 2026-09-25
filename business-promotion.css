@@ -1,0 +1,22 @@
+.business-promotions-page { height: calc(100vh - 74px); min-height: 500px; box-sizing: border-box; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 16px; padding: 28px 34px; overflow: hidden; min-width: 0; }
+.business-promotion-heading { margin-bottom: 18px; }
+.business-promotion-heading h1 { margin: 3px 0 7px; font-size: 24px; color: #183152; }
+.business-promotion-heading p { margin: 0; color: #6e83a1; }
+.business-promotion-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px 16px; padding: 18px; border: 1px solid #dbe5f1; border-radius: 10px; background: #fff; }
+.business-promotion-filters label { display: grid; gap: 6px; color: #7185a3; font-size: 12px; }
+.business-promotion-filters select, .business-promotion-filters input { min-height: 36px; padding: 0 10px; border: 1px solid #cfdaea; border-radius: 6px; color: #314968; background: #fff; }
+.business-promotion-filters label span { display: flex; align-items: center; gap: 7px; }
+.business-promotion-filters button { min-height: 36px; margin-right: 8px; padding: 0 14px; border: 0; border-radius: 6px; color: #fff; background: #2497bd; cursor: pointer; }
+.business-promotion-filters button.secondary { color: #45617f; border: 1px solid #cfdaea; background: #fff; }
+.business-promotion-note { margin: 0; padding: 11px 14px; border-left: 3px solid #3ac3cd; color: #367292; background: #edfafb; font-size: 13px; }
+.business-promotion-table { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; border: 1px solid #dbe5f1; border-radius: 10px; background: #fff; }
+.business-promotion-table-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.business-promotion-table table { width: 100%; min-width: 980px; border-collapse: collapse; }
+.business-promotion-table th, .business-promotion-table td { padding: 13px 15px; border-bottom: 1px solid #edf1f6; text-align: left; color: #38516f; font-size: 13px; white-space: nowrap; }
+.business-promotion-table th { color: #8392aa; font-weight: 500; background: #fff; }
+.business-promotion-table thead th { position: sticky; top: 0; z-index: 1; }
+.business-promotion-table .product-pagination { margin: 0; padding: 12px 16px; border-top: 1px solid #edf1f6; background: #fff; }
+.business-promotion-table td small { display: block; margin-top: 4px; color: #8194ad; }
+.business-promotion-roi { color: #079b79 !important; font-weight: 700; }
+.business-promotion-empty { padding: 32px !important; text-align: center !important; color: #8293aa !important; }
+@media (max-width: 760px) { .business-promotions-page { height: auto; min-height: 0; padding: 20px 16px; overflow: visible; } .business-promotion-filters { align-items: stretch; } .business-promotion-table { min-height: 420px; } }

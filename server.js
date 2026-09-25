@@ -413,6 +413,153 @@ async function listShopManagementData(request, response) {
     sendJson(response, 200, { shops, warehouses, shopWarehouses });
   } catch (error) { adminError(response, error); }
 }
+function promotionPayload(body) {
+  const shopId = String(body.shopId || ''), campaignName = String(body.campaignName || '店铺日推广费').trim(), promotionDate = String(body.promotionDate || ''), costAmount = Number(body.costAmount), skuCount = Number(body.skuCount || 0), orderCount = Number(body.orderCount || 0), revenueAmount = Number(body.revenueAmount || 0), currencyCode = String(body.currencyCode || '').trim().toUpperCase(), note = String(body.note || '').trim() || null;
+  if (!/^[0-9a-f-]{36}$/i.test(shopId) || !campaignName || campaignName.length > 120 || !/^\d{4}-\d{2}-\d{2}$/.test(promotionDate) || !Number.isFinite(costAmount) || costAmount < 0 || !Number.isInteger(skuCount) || skuCount < 0 || !Number.isInteger(orderCount) || orderCount < 0 || !Number.isFinite(revenueAmount) || revenueAmount < 0 || !/^[A-Z]{3}$/.test(currencyCode)) throw new Error('请完整填写店铺、日期、推广计划、成本、SKU 数、订单数、总收入和币种');
+  return { shopId, campaignName, promotionDate, costAmount, skuCount, orderCount, revenueAmount, currencyCode, note };
+}
+function promotionAmount(value, label) {
+  const normalized = String(value ?? '').replace(/,/g, '').replace(/^(?:CNY|VND|USD|PHP|IDR|THB|MYR)\s*/i, '').replace(/[¥￥$]/g, '').trim();
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error(`${label}必须是大于或等于 0 的数字`);
+  return amount;
+}
+function promotionDate(value) {
+  const source = String(value || '').trim().replace(/[/.]/g, '-');
+  if (!/^\d{4}-\d{1,2}-\d{1,2}$/.test(source)) throw new Error('按天必须是 YYYY-MM-DD 格式');
+  const [year, month, day] = source.split('-').map(Number), date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) throw new Error('按天不是有效日期');
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+function promotionSkuOrders(value) {
+  const source = String(value || '').trim();
+  if (!/^\d+$/.test(source)) throw new Error('SKU 订单数必须为整数');
+  const count = Number(source);
+  return { skuCount: count, orderCount: count };
+}
+async function parsePromotionImportRows(fileBase64, fileName) {
+  const raw = String(fileBase64 || '').replace(/^data:[^,]+,/, '');
+  if (!raw) return [];
+  const isExcel = /\.xlsx$/i.test(String(fileName || ''));
+  let matrix = [];
+  if (isExcel) {
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(Buffer.from(raw, 'base64'));
+    const sheet = workbook.worksheets[0]; if (!sheet) throw new Error('Excel 文件中没有工作表');
+    sheet.eachRow({ includeEmpty: false }, row => matrix.push(row.values.slice(1).map(value => value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? '').trim())));
+  } else {
+    const bytes = Buffer.from(raw, 'base64'); let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = new TextDecoder('gbk').decode(bytes); }
+    matrix = parseCsvRows(text);
+  }
+  if (matrix.length < 2) return [];
+  const required = ['按天', '成本', 'SKU 订单数（当前店铺）', '平均下单成本（当前店铺）', '总收入（当前店铺）', '投资回报率 (ROI)（当前店铺）', '币种'];
+  const headerRowIndex = matrix.findIndex(row => { const headers = row.map(value => String(value || '').replace(/^\uFEFF/, '').trim()); return required.every(field => headers.includes(field)); });
+  if (headerRowIndex < 0) throw new Error(`缺少导入表头：${required.join('、')}`);
+  const headers = matrix[headerRowIndex].map(value => String(value || '').replace(/^\uFEFF/, '').trim());
+  return matrix.slice(headerRowIndex + 1).filter(row => row.some(value => String(value || '').trim())).map((row, index) => Object.assign({ _rowNumber: headerRowIndex + index + 2 }, Object.fromEntries(headers.map((header, column) => [header, String(row[column] ?? '').trim()]))));
+}
+function promotionImportRow(row, shop) {
+  const day = promotionDate(row['按天']);
+  const { skuCount, orderCount } = promotionSkuOrders(row['SKU 订单数（当前店铺）']);
+  const currencyCode = String(row['币种'] || shop.currency_code || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currencyCode)) throw new Error('币种必须是三位货币代码');
+  return { promotionDate: day, costAmount: promotionAmount(row['成本'], '成本'), skuCount, orderCount, revenueAmount: promotionAmount(row['总收入（当前店铺）'], '总收入'), currencyCode };
+}
+function promotionBatchPrefix() {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  return ['year', 'month', 'day'].map(type => parts.find(part => part.type === type)?.value).join('');
+}
+async function nextPromotionBatchCode() {
+  const prefix = promotionBatchPrefix();
+  const { data, error } = await adminClient.from('promotion_import_batches').select('batch_code').like('batch_code', `${prefix}-%`);
+  if (error) throw new Error('生成推广费导入批次失败');
+  const sequence = (data || []).reduce((max, row) => Math.max(max, Number(String(row.batch_code).split('-')[1]) || 0), 0) + 1;
+  return `${prefix}-${String(sequence).padStart(4, '0')}`;
+}
+async function importPromotionExpenses(request, response) {
+  try {
+    const actor = await requireAdministrator(request), body = await readJson(request), mode = body.mode === 'commit' ? 'commit' : 'preview';
+    const shopId = String(body.shopId || ''), fileName = String(body.fileName || '店铺日推广费').slice(0, 200);
+    if (!/^[0-9a-f-]{36}$/i.test(shopId)) throw new Error('请选择对应店铺');
+    const { data: shop, error: shopError } = await adminClient.from('shops').select('id, shop_name, country_code, currency_code').eq('id', shopId).eq('is_active', true).single();
+    if (shopError || !shop) throw new Error('请选择启用中的店铺');
+    const parsedRows = Array.isArray(body.rows) ? body.rows : await parsePromotionImportRows(body.fileBase64, fileName);
+    if (!parsedRows.length) throw new Error('文件中没有可导入的推广费数据');
+    if (parsedRows.length > 5000) throw new Error('单次最多导入 5,000 行，请拆分文件后重试');
+    const rows = parsedRows;
+    const validRows = [], failures = [], seenDays = new Set();
+    rows.forEach(row => { try { const item = promotionImportRow(row, shop); if (seenDays.has(item.promotionDate)) throw new Error('文件内同一按天只能保留一条记录'); seenDays.add(item.promotionDate); validRows.push(item); } catch (error) { failures.push({ row: row._rowNumber || '?', reason: error.message || '数据无效' }); } });
+    if (failures.length) return sendJson(response, 200, { valid: false, totalRows: rows.length, failures: failures.slice(0, 100), message: '校验未通过：请修正失败行后重新上传，系统未写入任何数据。' });
+    const dates = validRows.map(item => item.promotionDate);
+    const { data: existing, error: existingError } = await adminClient.from('promotion_expenses').select('id, promotion_date, created_by').eq('shop_id', shop.id).in('promotion_date', dates);
+    if (existingError) throw new Error('读取已有店铺日推广费失败');
+    const existingByDay = new Map((existing || []).map(item => [item.promotion_date, item]));
+    const batchCode = await nextPromotionBatchCode();
+    const preview = { valid: true, batchCode, shop: { id: shop.id, name: shop.shop_name, countryCode: shop.country_code }, totalRows: validRows.length, insertCount: validRows.filter(item => !existingByDay.has(item.promotionDate)).length, updateCount: validRows.filter(item => existingByDay.has(item.promotionDate)).length };
+    if (mode === 'preview') return sendJson(response, 200, preview);
+    const { data: batch, error: batchError } = await adminClient.from('promotion_import_batches').insert({ batch_code: batchCode, shop_id: shop.id, file_name: fileName, total_rows: validRows.length, success_rows: 0, updated_rows: 0, skipped_rows: 0, imported_by: actor.id }).select().single();
+    if (batchError) throw new Error('创建推广费导入批次失败');
+    const payloads = validRows.map(item => ({ shop_id: shop.id, campaign_name: '店铺日推广费', promotion_date: item.promotionDate, cost_amount: item.costAmount, sku_count: item.skuCount, order_count: item.orderCount, revenue_amount: item.revenueAmount, currency_code: item.currencyCode, import_batch_id: batch.id, created_by: existingByDay.get(item.promotionDate)?.created_by || actor.id, updated_by: actor.id }));
+    const { error: writeError } = await adminClient.from('promotion_expenses').upsert(payloads, { onConflict: 'shop_id,promotion_date' });
+    if (writeError) throw new Error(`写入店铺日推广费失败：${writeError.message || '数据库错误'}`);
+    const { error: completeError } = await adminClient.from('promotion_import_batches').update({ success_rows: preview.insertCount + preview.updateCount, updated_rows: preview.updateCount }).eq('id', batch.id);
+    if (completeError) throw new Error('更新推广费导入批次失败');
+    await writeAudit(actor.id, 'promotion_import_batch', batch.id, 'commit_promotion_import', null, preview);
+    sendJson(response, 200, { ...preview, batch, message: `导入完成：批次 ${batchCode}，新增 ${preview.insertCount} 条，更新 ${preview.updateCount} 条。` });
+  } catch (error) { adminError(response, error); }
+}
+async function listPromotionExpenses(request, response) {
+  try {
+    await requireAdministrator(request);
+    const requestUrl = new URL(request.url, `http://${request.headers.host}`);
+    const reportCurrency = String(requestUrl.searchParams.get('currency') || 'USD').trim().toUpperCase();
+    const rateType = String(requestUrl.searchParams.get('rateType') || 'settlement').trim();
+    if (!QUOTE_CURRENCIES.has(reportCurrency)) throw new Error('报表币种仅支持 CNY 或 USD');
+    if (!['settlement', 'reference'].includes(rateType)) throw new Error('汇率取值参数无效');
+    const [{ data: promotions, error: promotionsError }, { data: shops, error: shopsError }, settlementRates] = await Promise.all([
+      adminClient.from('promotion_expenses').select('id, shop_id, campaign_name, promotion_date, cost_amount, sku_count, order_count, revenue_amount, currency_code, note, created_at, updated_at, shops!inner(shop_name, country_code)').order('promotion_date', { ascending: false }).order('created_at', { ascending: false }),
+      adminClient.from('shops').select('id, shop_name, country_code, currency_code').eq('is_active', true).order('shop_name'),
+      rateType === 'settlement'
+        ? adminClient.from('settlement_exchange_rates').select('base_currency, quote_currency, settlement_rate, effective_date').eq('is_active', true).order('effective_date', { ascending: false })
+        : Promise.resolve({ data: [], error: null })
+    ]);
+    if (promotionsError || shopsError || settlementRates.error) throw new Error('读取推广费用数据失败');
+    const referenceRateData = rateType === 'reference' ? await refreshRates(reportCurrency) : null;
+    const rateFor = (sourceCurrency, date) => {
+      if (sourceCurrency === reportCurrency) return 1;
+      if (rateType === 'reference') {
+        const rate = referenceRateData?.rates?.find(item => item.pair === `${sourceCurrency}/${reportCurrency}` && item.available);
+        return rate?.rate ? Number(rate.rate) : null;
+      }
+      const rate = (settlementRates.data || []).find(item => item.base_currency === sourceCurrency && item.quote_currency === reportCurrency && item.effective_date <= date);
+      return rate?.settlement_rate ? Number(rate.settlement_rate) : null;
+    };
+    const convertedPromotions = (promotions || []).map(item => {
+      const rate = rateFor(String(item.currency_code || '').toUpperCase(), item.promotion_date);
+      if (rate === null) return { ...item, cost_amount: null, revenue_amount: null, currency_code: reportCurrency, conversion_missing: true };
+      return { ...item, cost_amount: Number(item.cost_amount || 0) * rate, revenue_amount: Number(item.revenue_amount || 0) * rate, currency_code: reportCurrency, conversion_missing: false };
+    });
+    sendJson(response, 200, { promotions: convertedPromotions, shops: shops || [], currency: reportCurrency, rateType });
+  } catch (error) { adminError(response, error); }
+}
+async function createPromotionExpense(request, response) {
+  try {
+    const actor = await requireAdministrator(request), payload = promotionPayload(await readJson(request));
+    const { data: shop, error: shopError } = await adminClient.from('shops').select('id').eq('id', payload.shopId).single(); if (shopError || !shop) throw new Error('所选店铺不存在');
+    const record = { shop_id: payload.shopId, campaign_name: payload.campaignName, promotion_date: payload.promotionDate, cost_amount: payload.costAmount, sku_count: payload.skuCount, order_count: payload.orderCount, revenue_amount: payload.revenueAmount, currency_code: payload.currencyCode, note: payload.note, created_by: actor.id, updated_by: actor.id };
+    const { data, error } = await adminClient.from('promotion_expenses').insert(record).select().single(); if (error) throw new Error('新增推广费用失败');
+    await writeAudit(actor.id, 'promotion_expense', data.id, 'create', null, data); sendJson(response, 201, { promotion: data });
+  } catch (error) { adminError(response, error); }
+}
+async function updatePromotionExpense(request, response) {
+  try {
+    const actor = await requireAdministrator(request), body = await readJson(request), id = String(body.id || ''), payload = promotionPayload(body); if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('推广费用参数无效');
+    const { data: before, error: beforeError } = await adminClient.from('promotion_expenses').select('*').eq('id', id).single(); if (beforeError || !before) throw new Error('未找到推广费用记录');
+    const update = { shop_id: payload.shopId, campaign_name: payload.campaignName, promotion_date: payload.promotionDate, cost_amount: payload.costAmount, sku_count: payload.skuCount, order_count: payload.orderCount, revenue_amount: payload.revenueAmount, currency_code: payload.currencyCode, note: payload.note, updated_by: actor.id };
+    const { data, error } = await adminClient.from('promotion_expenses').update(update).eq('id', id).select().single(); if (error) throw new Error('修改推广费用失败');
+    await writeAudit(actor.id, 'promotion_expense', id, 'update', before, data); sendJson(response, 200, { promotion: data });
+  } catch (error) { adminError(response, error); }
+}
 async function createWarehouse(request, response) {
   try {
     const actor = await requireAdministrator(request);
@@ -1685,12 +1832,29 @@ async function listBusinessDashboardOverview(request, response) {
       if (settledByOrder.has(orderNumber)) settledOrderCount += 1;
       else estimatedOrderCount += 1;
     });
+    const { data: promotionRows, error: promotionRowsError } = await adminClient.from('promotion_expenses').select('shop_id, promotion_date, cost_amount, currency_code').in('shop_id', safeShopIds).gte('promotion_date', start).lte('promotion_date', end);
+    if (promotionRowsError) throw new Error('读取推广费用数据失败');
+    let promotionExpense = 0, promotionExpenseRecordCount = 0, missingPromotionRateCount = 0;
+    // 先按“店铺 + 日期”归集，同一天多次导入的费用会相加。
+    const promotionByShopDate = new Map();
+    (promotionRows || []).forEach(row => {
+      const converted = convertAmount(Number(row.cost_amount || 0), String(row.currency_code || '').toUpperCase(), row.promotion_date);
+      if (converted === null) { missingPromotionRateCount += 1; return; }
+      promotionExpense += converted; promotionExpenseRecordCount += 1;
+      const shopDateKey = `${row.shop_id}::${row.promotion_date}`;
+      promotionByShopDate.set(shopDateKey, (promotionByShopDate.get(shopDateKey) || 0) + converted);
+    });
+    const promotionByShop = new Map();
+    promotionByShopDate.forEach((amount, shopDateKey) => {
+      const shopId = shopDateKey.split('::')[0];
+      promotionByShop.set(shopId, (promotionByShop.get(shopId) || 0) + amount);
+    });
     const buildDashboardData = profitReport => {
       const signedOrderCount = [...ordersByNumber.values()].filter(order => order.signed).length;
       const salesSeries = [...salesByDate.entries()].map(([date, amount]) => ({ date, amount: Number(amount.toFixed(2)) }));
       const refundSeries = [...refundsByDate.values()].map(item => ({ ...item, refundRate: item.orders ? Number((item.refunds / item.orders * 100).toFixed(2)) : 0 }));
       const storeSales = [...salesByShop.values()].map(shop => ({ ...shop, amount: Number(shop.amount.toFixed(2)) })).sort((left, right) => right.amount - left.amount || String(left.shopCode || left.shopName).localeCompare(String(right.shopCode || right.shopName), 'zh-CN'));
-      return { salesAmount: Number(salesAmount.toFixed(2)), settlementExpectedAmount: Number(settlementExpectedAmount.toFixed(2)), settlementReadFailed, currency: reportCurrency, rateType, referenceRateUpdatedAt: referenceRateData?.updatedAt || null, start, end, salesSeries, refundSeries, storeSales, profitReport, orderItemCount: items.length, validOrderCount: ordersByNumber.size, signedOrderCount, signedRate: ordersByNumber.size ? Number((signedOrderCount / ordersByNumber.size * 100).toFixed(2)) : 0, convertedItemCount, missingRateItemCount, settledOrderCount, estimatedOrderCount, missingBillRateOrderCount };
+      return { salesAmount: Number(salesAmount.toFixed(2)), settlementExpectedAmount: Number(settlementExpectedAmount.toFixed(2)), promotionExpense: Number(promotionExpense.toFixed(2)), promotionExpenseRecordCount, missingPromotionRateCount, settlementReadFailed, currency: reportCurrency, rateType, referenceRateUpdatedAt: referenceRateData?.updatedAt || null, start, end, salesSeries, refundSeries, storeSales, profitReport, orderItemCount: items.length, validOrderCount: ordersByNumber.size, signedOrderCount, signedRate: ordersByNumber.size ? Number((signedOrderCount / ordersByNumber.size * 100).toFixed(2)) : 0, convertedItemCount, missingRateItemCount, settledOrderCount, estimatedOrderCount, missingBillRateOrderCount };
     };
     if (lightweightDashboard) {
       const data = buildDashboardData({ stores: [], products: [] });
@@ -1831,6 +1995,27 @@ async function listBusinessDashboardOverview(request, response) {
         return amount;
       });
     };
+    // 退款金额记录在订单层级。商品利润按商品行销售额分摊；若销售额为 0，
+    // 则按数量分摊，保证同一订单的退款不会在多个 SKU 上重复计算。
+    const refundAllocationsFor = order => {
+      if (!Number(order.refund || 0) || !order.items.length) return order.items.map(() => 0);
+      const lines = order.items.map(item => {
+        const raw = Number(item.sku_subtotal_after_discount || 0) + Number(item.shipping_fee_after_discount || 0) - Number(item.payment_platform_discount || 0);
+        const sales = convertAmount(raw, order.currency, order.date);
+        return { sales: sales === null ? 0 : Math.max(0, Number(sales || 0)), qty: Math.max(0, Number(item.quantity || 0)) };
+      });
+      const salesTotal = lines.reduce((sum, line) => sum + line.sales, 0);
+      const qtyTotal = lines.reduce((sum, line) => sum + line.qty, 0);
+      const divisor = salesTotal || qtyTotal || lines.length;
+      let allocated = 0;
+      return lines.map((line, index) => {
+        if (index === lines.length - 1) return Number((Number(order.refund) - allocated).toFixed(2));
+        const weight = salesTotal ? line.sales : (qtyTotal ? line.qty : 1);
+        const amount = Number((Number(order.refund) * weight / divisor).toFixed(2));
+        allocated += amount;
+        return amount;
+      });
+    };
     // 商品成本按订单明细行计算。运单去重只适用于仓库代发费用；同一运单中的
     // 多个 SKU 都必须各自按数量计商品成本。
     const productCostFor = (order, item) => {
@@ -1862,7 +2047,7 @@ async function listBusinessDashboardOverview(request, response) {
       store.refund += order.refund;
       store.platform += totals.platform;
       store.settlement += totals.settlement;
-      store.promotion += totals.promotion;
+      // 店铺推广费以推广管理按“店铺 + 日期”归集的费用为唯一口径，避免重复扣减账单明细费用。
       if (!chosenBills.length) {
         if (/取消|cancel/i.test(String(order.orderStatus || ''))) store.cancelledUnsettledOrderCount = Number(store.cancelledUnsettledOrderCount || 0) + 1;
         else store.missingSettlement += 1;
@@ -1870,6 +2055,7 @@ async function listBusinessDashboardOverview(request, response) {
       if (order.missingRate || totals.missingRate) store.missingRate += 1;
       storeProfitMap.set(order.shopId, store);
       const warehouseAllocations = warehouseAllocationsFor(order);
+      const refundAllocations = refundAllocationsFor(order);
       order.items.forEach((item, itemIndex) => {
         const lineKey = String(item.id || `${key}:${itemIndex}`);
         const productCostResult = productCostFor(order, item);
@@ -1896,13 +2082,14 @@ async function listBusinessDashboardOverview(request, response) {
         }
         const sku = String(item.sku_id || productCode || item.product_name || 'no-sku');
         const productKey = `${order.shopId}::${sku}`;
-        const product = profitProducts.get(productKey) || { shopId: order.shopId, shop: order.shop, site: order.site, code: productCode || '—', sku: item.sku_id || '—', name: productCostResult.product?.product_name || productNameByCode.get(productCode) || '—', qty: 0, orderKeys: new Set(), refunds: new Set(), appliedBillIds: new Set(), missingSettlementOrderKeys: new Set(), cancelledUnsettledOrderKeys: new Set(), sales: 0, settlement: 0, platform: 0, promotion: 0, productCost: 0, warehouseCost: 0, missingRate: false };
+        const product = profitProducts.get(productKey) || { shopId: order.shopId, shop: order.shop, site: order.site, code: productCode || '—', sku: item.sku_id || '—', name: productCostResult.product?.product_name || productNameByCode.get(productCode) || '—', qty: 0, orderKeys: new Set(), refunds: new Set(), appliedBillIds: new Set(), missingSettlementOrderKeys: new Set(), cancelledUnsettledOrderKeys: new Set(), sales: 0, refund: 0, settlement: 0, platform: 0, promotion: 0, productCost: 0, warehouseCost: 0, missingRate: false };
         product.qty += Number(item.quantity || 0);
         product.orderKeys.add(key);
         if (order.refunded) product.refunds.add(key);
         const itemSales = Number(item.sku_subtotal_after_discount || 0) + Number(item.shipping_fee_after_discount || 0) - Number(item.payment_platform_discount || 0);
         const convertedItemSales = convertAmount(itemSales, order.currency, order.date);
         if (convertedItemSales === null) product.missingRate = true; else product.sales += convertedItemSales;
+        product.refund += Number(refundAllocations[itemIndex] || 0);
         const indexedBills = productBillIndex.get(`${key}::${String(item.sku_id || '').trim()}`) || [];
         const productBills = indexedBills.filter(bill => !product.appliedBillIds.has(bill.id));
         productBills.forEach(bill => product.appliedBillIds.add(bill.id));
@@ -1952,11 +2139,19 @@ async function listBusinessDashboardOverview(request, response) {
       if (row.missingRate) items.push({ code: '汇率缺失', label: `汇率缺失 ${row.missingRate} 笔` });
       return items;
     };
+    storeProfitMap.forEach((store, shopId) => {
+      store.promotion = Number((promotionByShop.get(shopId) || 0).toFixed(2));
+    });
+
     const normalizeStore = row => {
       const statusItems = statusItemsFor(row);
       const warehouseCostMissingOrderCount = Number(row.warehouseConfigUnmatched || 0) + Number(row.warehouseConfigAmbiguous || 0) + Number(row.warehouseCostVersionMissing || 0) + Number(row.warehouseCostRateMissing || 0);
       const { warehouseStatusOrderKeys, productCostStatusLineKeys, ...store } = row;
-      return { ...store, productCost: Number(row.productCost || 0), warehouseCost: Number(row.warehouse || 0), warehouseCostMatchedOrderCount: Number(row.chargedWarehouseCostCount || 0), warehouseCostDuplicateOrderCount: Number(row.duplicateWarehouseCostCount || 0), warehouseCostCancelledOrderCount: Number(row.cancelledWarehouseCostCount || 0), warehouseCostNonEligibleOrderCount: Number(row.nonEligibleWarehouseCostCount || 0), warehouseCostMissingOrderCount, netProfit: null, netMargin: null, refundRate: row.validOrders ? Number((row.refundOrderCount / row.validOrders * 100).toFixed(2)) : 0, statusItems, dataState: statusItems.length ? statusItems.map(item => item.label).join('｜') : '正常' };
+      const settlement = Number(row.settlement || 0), productCost = Number(row.productCost || 0), warehouseCost = Number(row.warehouse || 0), promotion = Number(row.promotion || 0);
+      const totalCost = productCost + warehouseCost + promotion;
+      const netProfit = settlement - totalCost;
+      const netMargin = Number(row.sales || 0) ? netProfit / Number(row.sales || 0) * 100 : null;
+      return { ...store, productCost, warehouseCost, totalCost: Number(totalCost.toFixed(2)), warehouseCostMatchedOrderCount: Number(row.chargedWarehouseCostCount || 0), warehouseCostDuplicateOrderCount: Number(row.duplicateWarehouseCostCount || 0), warehouseCostCancelledOrderCount: Number(row.cancelledWarehouseCostCount || 0), warehouseCostNonEligibleOrderCount: Number(row.nonEligibleWarehouseCostCount || 0), warehouseCostMissingOrderCount, netProfit: Number(netProfit.toFixed(2)), netMargin: netMargin === null ? null : Number(netMargin.toFixed(2)), refundRate: row.validOrders ? Number((row.refundOrderCount / row.validOrders * 100).toFixed(2)) : 0, statusItems, dataState: statusItems.length ? statusItems.map(item => item.label).join('｜') : '正常' };
     };
     const normalizeProduct = row => {
       const validOrders = row.orderKeys.size;
@@ -1964,7 +2159,10 @@ async function listBusinessDashboardOverview(request, response) {
       const cancelledUnsettledOrderCount = row.cancelledUnsettledOrderKeys?.size || 0;
       const statusItems = statusItemsFor({ ...row, missingSettlement, cancelledUnsettledOrderCount, missingRate: row.missingRate ? validOrders : 0 });
       const { warehouseStatusOrderKeys, productCostStatusLineKeys, missingSettlementOrderKeys, cancelledUnsettledOrderKeys, ...product } = row;
-      return { ...product, validOrders, refundCount: row.refunds.size, missingSettlement, cancelledUnsettledOrderCount, productCost: Number(row.productCost || 0), warehouseCost: Number(row.warehouseCost || 0), warehouseCostMatchedOrderCount: Number(row.chargedWarehouseCostCount || 0), warehouseCostDuplicateOrderCount: Number(row.duplicateWarehouseCostCount || 0), warehouseCostCancelledOrderCount: Number(row.cancelledWarehouseCostCount || 0), warehouseCostNonEligibleOrderCount: Number(row.nonEligibleWarehouseCostCount || 0), warehouseCostMissingOrderCount: Number(row.warehouseConfigUnmatched || 0) + Number(row.warehouseConfigAmbiguous || 0) + Number(row.warehouseCostVersionMissing || 0) + Number(row.warehouseCostRateMissing || 0), netProfit: null, netMargin: null, refundRate: validOrders ? Number((row.refunds.size / validOrders * 100).toFixed(2)) : 0, statusItems, dataState: statusItems.length ? statusItems.map(item => item.label).join('｜') : '正常' };
+      const settlement = Number(row.settlement || 0), productCost = Number(row.productCost || 0), warehouseCost = Number(row.warehouseCost || 0), promotion = Number(row.promotion || 0);
+      const netProfit = settlement - productCost - warehouseCost - promotion;
+      const netMargin = Number(row.sales || 0) ? netProfit / Number(row.sales || 0) * 100 : null;
+      return { ...product, validOrders, refundCount: row.refunds.size, missingSettlement, cancelledUnsettledOrderCount, refund: Number(Number(row.refund || 0).toFixed(2)), productCost, warehouseCost, warehouseCostMatchedOrderCount: Number(row.chargedWarehouseCostCount || 0), warehouseCostDuplicateOrderCount: Number(row.duplicateWarehouseCostCount || 0), warehouseCostCancelledOrderCount: Number(row.cancelledWarehouseCostCount || 0), warehouseCostNonEligibleOrderCount: Number(row.nonEligibleWarehouseCostCount || 0), warehouseCostMissingOrderCount: Number(row.warehouseConfigUnmatched || 0) + Number(row.warehouseConfigAmbiguous || 0) + Number(row.warehouseCostVersionMissing || 0) + Number(row.warehouseCostRateMissing || 0), netProfit: Number(netProfit.toFixed(2)), netMargin: netMargin === null ? null : Number(netMargin.toFixed(2)), refundRate: validOrders ? Number((row.refunds.size / validOrders * 100).toFixed(2)) : 0, statusItems, dataState: statusItems.length ? statusItems.map(item => item.label).join('｜') : '正常' };
     };
     const profitReport = { stores: [...storeProfitMap.values()].map(normalizeStore).sort((a, b) => b.sales - a.sales), products: [...profitProducts.values()].map(normalizeProduct).sort((a, b) => b.sales - a.sales) };
     const data = buildDashboardData(profitReport);
@@ -2235,6 +2433,51 @@ async function listBusinessSettlementRates(request, response) {
     sendJson(response, 200, { rates: enriched, versions, today });
   } catch (error) { adminError(response, error); }
 }
+async function listBusinessPromotions(request, response) {
+  try {
+    const accessToken = bearerToken(request);
+    if (!accessToken) throw new Error('UNAUTHORIZED');
+    const identity = await getAuthenticatedProfile(accessToken);
+    if (!identity.primaryRole) throw new Error('FORBIDDEN');
+    const requestUrl = new URL(request.url, `http://${request.headers.host}`);
+    const reportCurrency = String(requestUrl.searchParams.get('currency') || 'USD').trim().toUpperCase();
+    const rateType = String(requestUrl.searchParams.get('rateType') || 'settlement').trim();
+    if (!QUOTE_CURRENCIES.has(reportCurrency)) throw new Error('报表币种仅支持 CNY 或 USD');
+    if (!['settlement', 'reference'].includes(rateType)) throw new Error('汇率取值参数无效');
+    const isPrivileged = identity.roles.some(role => ['finance', 'admin', 'super_admin'].includes(role));
+    const { data: permissions, error: permissionsError } = await adminClient.from('user_shop_permissions').select('shop_id').eq('user_id', identity.profile.id);
+    if (permissionsError) throw new Error('读取店铺授权失败');
+    let shopQuery = adminClient.from('shops').select('id, shop_name, country_code').eq('is_active', true).order('shop_name');
+    if (!isPrivileged) shopQuery = (permissions || []).length ? shopQuery.in('id', permissions.map(item => item.shop_id)) : shopQuery.in('id', ['00000000-0000-0000-0000-000000000000']);
+    const { data: shops, error: shopsError } = await shopQuery;
+    if (shopsError) throw new Error('读取已授权店铺失败');
+    const shopIds = (shops || []).map(shop => shop.id);
+    const [{ data: promotions, error: promotionsError }, settlementRates] = await Promise.all([
+      adminClient.from('promotion_expenses').select('id, shop_id, promotion_date, cost_amount, sku_count, order_count, revenue_amount, currency_code, shops!inner(shop_name, country_code)').in('shop_id', shopIds.length ? shopIds : ['00000000-0000-0000-0000-000000000000']).order('promotion_date', { ascending: false }).order('created_at', { ascending: false }),
+      rateType === 'settlement'
+        ? adminClient.from('settlement_exchange_rates').select('base_currency, quote_currency, settlement_rate, effective_date').eq('is_active', true).order('effective_date', { ascending: false })
+        : Promise.resolve({ data: [], error: null })
+    ]);
+    if (promotionsError || settlementRates.error) throw new Error('读取推广费用数据失败');
+    const referenceRateData = rateType === 'reference' ? await refreshRates(reportCurrency) : null;
+    const rateFor = (sourceCurrency, date) => {
+      if (sourceCurrency === reportCurrency) return 1;
+      if (rateType === 'reference') {
+        const rate = referenceRateData?.rates?.find(item => item.pair === `${sourceCurrency}/${reportCurrency}` && item.available);
+        return rate?.rate ? Number(rate.rate) : null;
+      }
+      const rate = (settlementRates.data || []).find(item => item.base_currency === sourceCurrency && item.quote_currency === reportCurrency && item.effective_date <= date);
+      return rate?.settlement_rate ? Number(rate.settlement_rate) : null;
+    };
+    const rows = (promotions || []).map(item => {
+      const rate = rateFor(String(item.currency_code || '').toUpperCase(), item.promotion_date);
+      return rate === null
+        ? { ...item, cost_amount: null, revenue_amount: null, currency_code: reportCurrency, conversion_missing: true }
+        : { ...item, cost_amount: Number(item.cost_amount || 0) * rate, revenue_amount: Number(item.revenue_amount || 0) * rate, currency_code: reportCurrency, conversion_missing: false };
+    });
+    sendJson(response, 200, { promotions: rows, shops: shops || [], currency: reportCurrency, rateType });
+  } catch (error) { adminError(response, error); }
+}
 async function deletePendingMember(request, response) {
   try {
     const actor = await requireAdministrator(request);
@@ -2261,7 +2504,7 @@ function serveFile(request, response) {
 }
 http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
-  const masterDataWrite = (url.pathname === '/api/admin/shops' && request.method === 'POST') || (url.pathname === '/api/admin/shops/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/warehouses' && request.method === 'POST') || (url.pathname === '/api/admin/warehouses/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/country-sites' && request.method === 'POST') || (url.pathname === '/api/admin/products' && ['POST', 'DELETE'].includes(request.method)) || (url.pathname === '/api/admin/products/import' && request.method === 'POST') || (url.pathname === '/api/admin/products/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/settlement-rates' && ['POST', 'DELETE'].includes(request.method)) || (url.pathname === '/api/admin/settlement-rates/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/members' && request.method === 'POST') || (url.pathname === '/api/admin/members/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/members/status' && request.method === 'PUT') || (url.pathname === '/api/admin/order-imports/correct-dates' && request.method === 'POST') || (url.pathname === '/api/admin/bill-imports' && request.method === 'POST');
+  const masterDataWrite = (url.pathname === '/api/admin/shops' && request.method === 'POST') || (url.pathname === '/api/admin/shops/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/promotions' && request.method === 'POST') || (url.pathname === '/api/admin/promotions/import' && request.method === 'POST') || (url.pathname === '/api/admin/promotions/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/warehouses' && request.method === 'POST') || (url.pathname === '/api/admin/warehouses/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/country-sites' && request.method === 'POST') || (url.pathname === '/api/admin/products' && ['POST', 'DELETE'].includes(request.method)) || (url.pathname === '/api/admin/products/import' && request.method === 'POST') || (url.pathname === '/api/admin/products/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/settlement-rates' && ['POST', 'DELETE'].includes(request.method)) || (url.pathname === '/api/admin/settlement-rates/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/members' && request.method === 'POST') || (url.pathname === '/api/admin/members/configuration' && request.method === 'PUT') || (url.pathname === '/api/admin/members/status' && request.method === 'PUT') || (url.pathname === '/api/admin/order-imports/correct-dates' && request.method === 'POST') || (url.pathname === '/api/admin/bill-imports' && request.method === 'POST');
   if (VISUAL_MODE && url.pathname.startsWith('/api/admin/') && ['POST', 'PUT', 'DELETE'].includes(request.method) && !masterDataWrite && !(url.pathname === '/api/admin/order-imports' && request.method === 'POST') && !(url.pathname === '/api/admin/order-imports/orders' && request.method === 'POST')) {
     return sendJson(response, 423, { message: '当前为视觉演示模式，管理数据不会写入系统。' });
   }
@@ -2273,6 +2516,10 @@ http.createServer(async (request, response) => {
   if (url.pathname === '/api/admin/shops' && request.method === 'GET') return listShopManagementData(request, response);
   if (url.pathname === '/api/admin/shops' && request.method === 'POST') return createShop(request, response);
   if (url.pathname === '/api/admin/shops/configuration' && request.method === 'PUT') return updateShop(request, response);
+  if (url.pathname === '/api/admin/promotions' && request.method === 'GET') return listPromotionExpenses(request, response);
+  if (url.pathname === '/api/admin/promotions' && request.method === 'POST') return createPromotionExpense(request, response);
+  if (url.pathname === '/api/admin/promotions/import' && request.method === 'POST') return importPromotionExpenses(request, response);
+  if (url.pathname === '/api/admin/promotions/configuration' && request.method === 'PUT') return updatePromotionExpense(request, response);
   if (url.pathname === '/api/admin/warehouses' && request.method === 'GET') return listWarehouseManagementData(request, response);
   if (url.pathname === '/api/admin/warehouses' && request.method === 'POST') return createWarehouse(request, response);
   if (url.pathname === '/api/admin/warehouses/configuration' && request.method === 'PUT') return updateWarehouse(request, response);
@@ -2308,6 +2555,7 @@ http.createServer(async (request, response) => {
   if (url.pathname === '/api/business/warehouse-costs' && request.method === 'GET') return listBusinessWarehouseCosts(request, response);
   if (url.pathname === '/api/business/products' && request.method === 'GET') return listBusinessProducts(request, response);
   if (url.pathname === '/api/business/settlement-rates' && request.method === 'GET') return listBusinessSettlementRates(request, response);
+  if (url.pathname === '/api/business/promotions' && request.method === 'GET') return listBusinessPromotions(request, response);
   if (url.pathname === '/api/health' && request.method === 'GET') return sendJson(response, 200, { status: 'ok', supabaseConfigured: Boolean(authClient && adminClient) });
   if (url.pathname === '/api/reference-rates') {
     const quote = url.searchParams.get('currency') || 'CNY';

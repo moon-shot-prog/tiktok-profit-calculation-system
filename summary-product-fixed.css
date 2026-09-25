@@ -1,0 +1,39 @@
+/* 商品利润页：筛选与控制区固定，只有产品明细表格可以滚动。 */
+.summary-page.summary-product-fixed {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  overflow: hidden;
+}
+.summary-page.summary-product-fixed > .summary-filters { position: static; margin: 0; padding: 18px 0; }
+.summary-page.summary-product-fixed > .summary-scope { margin: 0; }
+.summary-page.summary-product-fixed > .summary-kpis,
+.summary-page.summary-product-fixed > .summary-grid { display: none; }
+.summary-page.summary-product-fixed > .summary-detail {
+  min-height: 0;
+  margin: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+.summary-page.summary-product-fixed #profitTabProduct:not(.is-hidden) {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.summary-page.summary-product-fixed .profit-product-table-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.summary-page.summary-product-fixed .profit-product-table-scroll table { margin-top: 0; }
+.summary-page.summary-product-fixed .profit-product-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+}
+@media (max-width: 760px) {
+  .summary-page.summary-product-fixed { display: block; overflow: auto; }
+  .summary-page.summary-product-fixed > .summary-detail { min-height: 460px; display: grid; }
+}

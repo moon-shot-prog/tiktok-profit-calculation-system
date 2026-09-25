@@ -1,4 +1,11 @@
 (() => {
+  const promotionKpi = document.querySelector('#dashboardSignedRate')?.closest('article');
+  if (promotionKpi) {
+    const label = promotionKpi.querySelector('span');
+    const note = promotionKpi.querySelector('#dashboardSignedRateNote');
+    if (label) label.textContent = '推广费';
+    if (note) note.innerHTML = '<em>推广管理成本</em>';
+  }
   const form = document.querySelector('#dashboardFilters');
   if (!form) return;
   const shop = form.querySelector('#dashboardShopFilter');
@@ -67,16 +74,16 @@
     const validOrdersNote = document.querySelector('#dashboardValidOrdersNote');
     const settlementAmount = document.querySelector('#dashboardSettlementAmount');
     const settlementNote = document.querySelector('#dashboardSettlementNote');
-    const signedRate = document.querySelector('#dashboardSignedRate');
-    const signedRateNote = document.querySelector('#dashboardSignedRateNote');
+    const promotionExpense = document.querySelector('#dashboardSignedRate');
+    const promotionExpenseNote = document.querySelector('#dashboardSignedRateNote');
     gmv.textContent = formatAmount(data.salesAmount, data.currency);
     validOrders.textContent = new Intl.NumberFormat('zh-CN').format(Number(data.validOrderCount || 0));
     settlementAmount.textContent = data.settlementReadFailed ? '—' : formatAmount(data.settlementExpectedAmount, data.currency);
-    signedRate.textContent = `${Number(data.signedRate || 0).toFixed(2)}%`;
+    promotionExpense.textContent = formatAmount(data.promotionExpense, data.currency);
     note.innerHTML = `<em>${data.rateType === 'reference' ? '支付金额按实时参考汇率换算' : '支付金额按下单日期匹配报表结算汇率'}${data.missingRateItemCount ? ` · ${data.missingRateItemCount} 条缺少汇率` : ''}</em>`;
     validOrdersNote.innerHTML = '<em>按销售额取值订单 ID 去重</em>';
     settlementNote.innerHTML = data.settlementReadFailed ? '<em>结算账单暂时无法读取，不影响销售额与订单数</em>' : `<em>已结算 ${data.settledOrderCount || 0} 笔 · 预计 ${data.estimatedOrderCount || 0} 笔 · ${data.rateType === 'reference' ? '实时参考汇率' : '报表结算汇率'}${data.missingBillRateOrderCount ? ` · ${data.missingBillRateOrderCount} 笔缺少汇率` : ''}</em>`;
-    signedRateNote.innerHTML = `<em>已签收 ${data.signedOrderCount || 0} 笔 / 有效订单</em>`;
+    promotionExpenseNote.innerHTML = `<em>推广管理成本 ${data.promotionExpenseRecordCount || 0} 条 · ${data.rateType === 'reference' ? '实时参考汇率' : '报表结算汇率'}${data.missingPromotionRateCount ? ` · ${data.missingPromotionRateCount} 条缺少汇率` : ''}</em>`;
   }
   async function loadGmv(force = false) {
     const gmv = document.querySelector('#dashboardGmv');
@@ -85,9 +92,9 @@
     const validOrdersNote = document.querySelector('#dashboardValidOrdersNote');
     const settlementAmount = document.querySelector('#dashboardSettlementAmount');
     const settlementNote = document.querySelector('#dashboardSettlementNote');
-    const signedRate = document.querySelector('#dashboardSignedRate');
-    const signedRateNote = document.querySelector('#dashboardSignedRateNote');
-    if (!gmv || !note || !validOrders || !validOrdersNote || !settlementAmount || !settlementNote || !signedRate || !signedRateNote) return;
+    const promotionExpense = document.querySelector('#dashboardSignedRate');
+    const promotionExpenseNote = document.querySelector('#dashboardSignedRateNote');
+    if (!gmv || !note || !validOrders || !validOrdersNote || !settlementAmount || !settlementNote || !promotionExpense || !promotionExpenseNote) return;
     if (!token()) return;
     const { start, end } = dateRange();
     if (!start || !end || start > end) return;
@@ -102,8 +109,8 @@
       displayOverview(dashboardCacheData);
       note.innerHTML = '<em>正在更新最新数据…</em>';
     } else {
-      gmv.textContent = '—'; validOrders.textContent = '—'; settlementAmount.textContent = '—'; signedRate.textContent = '—';
-      note.innerHTML = '<em>正在按报表结算汇率换算…</em>'; validOrdersNote.innerHTML = '<em>正在读取订单…</em>'; settlementNote.innerHTML = '<em>正在匹配结算账单…</em>'; signedRateNote.innerHTML = '<em>正在统计签收状态…</em>';
+      gmv.textContent = '—'; validOrders.textContent = '—'; settlementAmount.textContent = '—'; promotionExpense.textContent = '—';
+      note.innerHTML = '<em>正在按报表结算汇率换算…</em>'; validOrdersNote.innerHTML = '<em>正在读取订单…</em>'; settlementNote.innerHTML = '<em>正在匹配结算账单…</em>'; promotionExpenseNote.innerHTML = '<em>正在读取推广管理成本…</em>';
     }
     try {
       const params = new URLSearchParams({ start, end, currency: currency.value, rateType: rateType.value, view: 'dashboard', ...(force ? { refresh: 'true' } : {}) });
@@ -119,8 +126,8 @@
         displayOverview(dashboardCacheData);
         note.innerHTML = `<em>最新读取失败，已保留上次结果：${message}</em>`;
       } else {
-        gmv.textContent = '—'; validOrders.textContent = '—'; settlementAmount.textContent = '—'; signedRate.textContent = '—';
-        note.innerHTML = `<em>${message}</em>`; validOrdersNote.innerHTML = '<em>—</em>'; settlementNote.innerHTML = '<em>—</em>'; signedRateNote.innerHTML = '<em>—</em>';
+        gmv.textContent = '—'; validOrders.textContent = '—'; settlementAmount.textContent = '—'; promotionExpense.textContent = '—';
+        note.innerHTML = `<em>${message}</em>`; validOrdersNote.innerHTML = '<em>—</em>'; settlementNote.innerHTML = '<em>—</em>'; promotionExpenseNote.innerHTML = '<em>—</em>';
       }
     }
   }
