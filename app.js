@@ -16,8 +16,13 @@ const dialogPassword = document.querySelector('#dialogPassword');
 const dialogSubmit = document.querySelector('#dialogSubmit');
 const dialogMessage = document.querySelector('#dialogMessage');
 const AUTH_SESSION_KEY = 'tiktokShopAuthSession';
+const AUTH_INACTIVITY_TIMEOUT = 8 * 60 * 60 * 1000;
+const AUTH_REFRESH_LEEWAY = 5 * 60 * 1000;
+const AUTH_ACTIVE_REFRESH_WINDOW = 15 * 60 * 1000;
+const nativeFetch = window.fetch.bind(window);
 let dialogMode = '';
 let currentWorkspaceRole = '';
+let sessionRefreshTimer = null;
 
 function isEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
 function isPhone(value) { return /^(?:\+?86)?1[3-9]\d{9}$/.test(value.replace(/[\s-]/g, '')); }
@@ -63,11 +68,48 @@ function readAuthSession() {
 function clearAuthSession() {
   localStorage.removeItem(AUTH_SESSION_KEY);
   sessionStorage.removeItem(AUTH_SESSION_KEY);
+  if (sessionRefreshTimer) window.clearTimeout(sessionRefreshTimer);
+  sessionRefreshTimer = null;
+}
+function sessionIsInactive(session) { return Boolean(session?.lastActivityAt) && Date.now() - Number(session.lastActivityAt) >= AUTH_INACTIVITY_TIMEOUT; }
+function showSessionExpired(message = '登录状态已失效，请重新登录') {
+  clearAuthSession();
+  document.dispatchEvent(new CustomEvent('business:promotion-cache-reset'));
+  adminWorkspace.classList.add('is-hidden'); salesWorkspace.classList.add('is-hidden'); loginPage.classList.remove('is-hidden'); password.value = '';
+  formMessage.textContent = message;
+}
+function touchSession() {
+  const storage = authSessionStorage(); const current = readAuthSession();
+  if (!storage || !current) return null;
+  if (sessionIsInactive(current)) { showSessionExpired('超过 8 小时未操作，登录状态已失效，请重新登录'); return null; }
+  if (Date.now() - Number(current.lastActivityAt || 0) >= 60 * 1000) {
+    const updated = { ...current, lastActivityAt: Date.now() };
+    storage.setItem(AUTH_SESSION_KEY, JSON.stringify(updated));
+    scheduleSessionRefresh(updated);
+    return updated;
+  }
+  return current;
+}
+function scheduleSessionRefresh(session = readAuthSession()) {
+  if (sessionRefreshTimer) window.clearTimeout(sessionRefreshTimer);
+  if (!session?.expiresAt || sessionIsInactive(session)) return;
+  const delay = Math.max(10 * 1000, Number(session.expiresAt) * 1000 - Date.now() - AUTH_REFRESH_LEEWAY);
+  sessionRefreshTimer = window.setTimeout(async () => {
+    const current = readAuthSession();
+    if (!current || sessionIsInactive(current)) return showSessionExpired('超过 8 小时未操作，登录状态已失效，请重新登录');
+    // Only renew while the person is actively using the system. Otherwise an
+    // automatic refresh would keep the Supabase session alive during idle time.
+    if (Date.now() - Number(current.lastActivityAt || 0) > AUTH_ACTIVE_REFRESH_WINDOW) return;
+    try { await refreshAuthSession(); }
+    catch { if (Number(current.expiresAt || 0) * 1000 <= Date.now()) showSessionExpired(); }
+  }, delay);
 }
 function storeAuthSession(session) {
   const target = rememberMe.checked ? localStorage : sessionStorage;
   clearAuthSession();
-  target.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+  const stored = { ...session, lastActivityAt: Date.now() };
+  target.setItem(AUTH_SESSION_KEY, JSON.stringify(stored));
+  scheduleSessionRefresh(stored);
 }
 let refreshSessionPromise = null;
 async function refreshAuthSession() {
@@ -78,6 +120,7 @@ async function refreshAuthSession() {
     .then(result => {
       const refreshed = { ...current, ...result.session, primaryRole: result.primaryRole, user: result.user };
       storage.setItem(AUTH_SESSION_KEY, JSON.stringify(refreshed));
+      scheduleSessionRefresh(refreshed);
       return refreshed;
     })
     .finally(() => { refreshSessionPromise = null; });
@@ -87,14 +130,34 @@ async function authenticatedFetch(url, options = {}) {
   const send = async session => {
     const headers = new Headers(options.headers || {});
     headers.set('Authorization', `Bearer ${session?.accessToken || ''}`);
-    return fetch(url, { ...options, headers });
+      return nativeFetch(url, { ...options, headers });
   };
   let response = await send(readAuthSession());
   if (response.status !== 401) return response;
   try { response = await send(await refreshAuthSession()); } catch { /* Preserve the original 401 for the caller to render. */ }
   return response;
 }
+async function refreshAwareFetch(input, options = {}) {
+  const requestUrl = new URL(typeof input === 'string' ? input : input.url, location.origin);
+  const isSystemApi = requestUrl.origin === location.origin && requestUrl.pathname.startsWith('/api/');
+  const isAuthApi = requestUrl.pathname.startsWith('/api/auth/');
+  if (!isSystemApi || isAuthApi) return nativeFetch(input, options);
+  const current = touchSession();
+  if (!current) return new Response(JSON.stringify({ message: '登录状态已失效，请重新登录' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  const headers = new Headers(options.headers || {});
+  headers.set('Authorization', `Bearer ${current.accessToken || ''}`);
+  let response = await nativeFetch(input, { ...options, headers });
+  if (response.status !== 401) return response;
+  try {
+    const refreshed = await refreshAuthSession();
+    headers.set('Authorization', `Bearer ${refreshed.accessToken || ''}`);
+    response = await nativeFetch(input, { ...options, headers });
+  } catch { /* Return the original unauthorized response for the calling page to handle. */ }
+  return response;
+}
+window.fetch = refreshAwareFetch;
 window.tiktokAuth = { getSession: readAuthSession, refreshSession: refreshAuthSession, fetch: authenticatedFetch };
+['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(eventName => window.addEventListener(eventName, () => touchSession(), { passive: true }));
 async function login() {
   if (location.protocol === 'file:') {
     formMessage.textContent = '请通过 http://localhost:3000 打开系统，不能直接双击 index.html 登录。';
@@ -168,7 +231,14 @@ document.querySelector('#returnAdminWorkspace')?.addEventListener('click', retur
 updateInitialization();
 if (location.protocol === 'file:') formMessage.textContent = '当前为文件预览模式。请在浏览器打开 http://localhost:3000 后登录。';
 const remembered = readAuthSession();
-if (remembered) {
+if (remembered && sessionIsInactive(remembered)) {
+  showSessionExpired('超过 8 小时未操作，登录状态已失效，请重新登录');
+} else if (remembered) {
+  if (!remembered.lastActivityAt) {
+    const storage = authSessionStorage();
+    storage?.setItem(AUTH_SESSION_KEY, JSON.stringify({ ...remembered, lastActivityAt: Date.now() }));
+  }
+  scheduleSessionRefresh(readAuthSession());
   requestJson('/api/auth/session', { accessToken: remembered.accessToken })
     .then(result => enterWorkspace(result.primaryRole, result.user))
     .catch(async error => {
