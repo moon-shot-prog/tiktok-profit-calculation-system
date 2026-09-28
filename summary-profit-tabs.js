@@ -181,7 +181,7 @@
         renderRows();
         return;
       }
-      $('#profitTabSubtitle').textContent = `正在读取真实数据：${range.start} 至 ${range.end} · ${currency}`;
+      $('#profitTabSubtitle').textContent = `正在读取最新数据：${range.start} 至 ${range.end} · ${currency}`;
       const [shopResponse, dataResponse] = await Promise.all([
         fetch('/api/business/shops', { headers: headers() }),
         fetch(`/api/business/dashboard-overview?${new URLSearchParams({ ...range, currency, rateType, ...(shopId ? { shopId } : {}), ...(site ? { site } : {}), ...(force ? { refresh: 'true' } : {}) })}`, { headers: headers() })
@@ -198,7 +198,7 @@
       products = (data.profitReport?.products || []).map(row => ({ ...row, orders: row.validOrders, refunds: row.refundCount, product: row.productCost, warehouse: row.warehouseCost, profit: row.netProfit, margin: row.netMargin, state: row.dataState, statusItems: row.statusItems || [] }));
       cacheKey = nextKey;
       cacheAt = Date.now();
-      $('#profitTabSubtitle').textContent = `真实数据：${reportRange.start} 至 ${reportRange.end} · ${reportCurrency}`;
+      $('#profitTabSubtitle').textContent = `最新数据：${reportRange.start} 至 ${reportRange.end} · ${reportCurrency}`;
       renderRows();
     } catch (error) {
       stores = [];

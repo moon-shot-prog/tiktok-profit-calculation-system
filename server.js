@@ -505,6 +505,7 @@ async function importPromotionExpenses(request, response) {
     const { error: completeError } = await adminClient.from('promotion_import_batches').update({ success_rows: preview.insertCount + preview.updateCount, updated_rows: preview.updateCount }).eq('id', batch.id);
     if (completeError) throw new Error('更新推广费导入批次失败');
     await writeAudit(actor.id, 'promotion_import_batch', batch.id, 'commit_promotion_import', null, preview);
+    dashboardOverviewCache.clear();
     sendJson(response, 200, { ...preview, batch, message: `导入完成：批次 ${batchCode}，新增 ${preview.insertCount} 条，更新 ${preview.updateCount} 条。` });
   } catch (error) { adminError(response, error); }
 }
@@ -548,7 +549,7 @@ async function createPromotionExpense(request, response) {
     const { data: shop, error: shopError } = await adminClient.from('shops').select('id').eq('id', payload.shopId).single(); if (shopError || !shop) throw new Error('所选店铺不存在');
     const record = { shop_id: payload.shopId, campaign_name: payload.campaignName, promotion_date: payload.promotionDate, cost_amount: payload.costAmount, sku_count: payload.skuCount, order_count: payload.orderCount, revenue_amount: payload.revenueAmount, currency_code: payload.currencyCode, note: payload.note, created_by: actor.id, updated_by: actor.id };
     const { data, error } = await adminClient.from('promotion_expenses').insert(record).select().single(); if (error) throw new Error('新增推广费用失败');
-    await writeAudit(actor.id, 'promotion_expense', data.id, 'create', null, data); sendJson(response, 201, { promotion: data });
+    await writeAudit(actor.id, 'promotion_expense', data.id, 'create', null, data); dashboardOverviewCache.clear(); sendJson(response, 201, { promotion: data });
   } catch (error) { adminError(response, error); }
 }
 async function updatePromotionExpense(request, response) {
@@ -557,7 +558,7 @@ async function updatePromotionExpense(request, response) {
     const { data: before, error: beforeError } = await adminClient.from('promotion_expenses').select('*').eq('id', id).single(); if (beforeError || !before) throw new Error('未找到推广费用记录');
     const update = { shop_id: payload.shopId, campaign_name: payload.campaignName, promotion_date: payload.promotionDate, cost_amount: payload.costAmount, sku_count: payload.skuCount, order_count: payload.orderCount, revenue_amount: payload.revenueAmount, currency_code: payload.currencyCode, note: payload.note, updated_by: actor.id };
     const { data, error } = await adminClient.from('promotion_expenses').update(update).eq('id', id).select().single(); if (error) throw new Error('修改推广费用失败');
-    await writeAudit(actor.id, 'promotion_expense', id, 'update', before, data); sendJson(response, 200, { promotion: data });
+    await writeAudit(actor.id, 'promotion_expense', id, 'update', before, data); dashboardOverviewCache.clear(); sendJson(response, 200, { promotion: data });
   } catch (error) { adminError(response, error); }
 }
 async function createWarehouse(request, response) {
@@ -945,7 +946,7 @@ async function importTiktokBills(request, response) {
         if (changesError) throw new Error(`保存账单回滚快照失败：${changesError.message || '数据库写入失败'}`);
       }
       const { error: completeError } = await adminClient.from('order_import_batches').update({ success_rows: insertCount + updateCount, updated_rows: updateCount, skipped_rows: skipCount, validation_status: 'completed' }).eq('id', batch.id); if (completeError) throw completeError;
-      await writeAudit(actor.id, 'tiktok_bill_import', batch.id, 'commit_tiktok_bill_import', null, preview); sendJson(response, 200, { ...preview, batch, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条；替代预估 ${replaceCount} 条，待核对 ${reviewCount} 条。` });
+      await writeAudit(actor.id, 'tiktok_bill_import', batch.id, 'commit_tiktok_bill_import', null, preview); dashboardOverviewCache.clear(); sendJson(response, 200, { ...preview, batch, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条；替代预估 ${replaceCount} 条，待核对 ${reviewCount} 条。` });
     } catch (error) { await adminClient.from('order_import_batches').update({ validation_status: 'partial', failure_summary: [{ reason: error.message || '写入中断' }] }).eq('id', batch.id); throw error; }
   } catch (error) { adminError(response, error); }
 }
@@ -957,7 +958,7 @@ async function manageBillBatch(request, response) {
     if (batch.validation_status !== 'completed') throw new Error('仅已完成的批次可回滚'); const { data: changes, error: changesError } = await adminClient.from('tiktok_bill_import_changes').select('*').eq('batch_id', batchId).order('created_at', { ascending: false }); if (changesError) throw changesError; if (!changes?.length) throw new Error('该历史批次没有回滚快照，无法安全回滚');
     const inserted = changes.filter(item => item.operation === 'insert').map(item => item.record_id).filter(Boolean); if (inserted.length) { const { data: current } = await adminClient.from('tiktok_bill_records').select('id, import_batch_id').in('id', inserted); if ((current || []).some(item => item.import_batch_id !== batchId)) throw new Error('该批次记录已被后续导入更新，不能安全回滚'); }
     for (const change of changes) { if (change.operation === 'insert') { const { error } = await adminClient.from('tiktok_bill_records').delete().eq('id', change.record_id).eq('import_batch_id', batchId); if (error) throw error; } else if (change.before_data) { const { id, created_at, updated_at, ...restore } = change.before_data; const { error } = await adminClient.from('tiktok_bill_records').update(restore).eq('id', change.record_id); if (error) throw error; } }
-    const { error: statusError } = await adminClient.from('order_import_batches').update({ validation_status: 'rolled_back' }).eq('id', batchId); if (statusError) throw statusError; await writeAudit(actor.id, 'tiktok_bill_import', batchId, 'rollback_tiktok_bill_import', batch, null); sendJson(response, 200, { message: `已安全回滚批次 ${batch.batch_code}` });
+    const { error: statusError } = await adminClient.from('order_import_batches').update({ validation_status: 'rolled_back' }).eq('id', batchId); if (statusError) throw statusError; await writeAudit(actor.id, 'tiktok_bill_import', batchId, 'rollback_tiktok_bill_import', batch, null); dashboardOverviewCache.clear(); sendJson(response, 200, { message: `已安全回滚批次 ${batch.batch_code}` });
   } catch (error) { adminError(response, error); }
 }
 async function importOrderSettlementData(request, response) {
@@ -1067,6 +1068,7 @@ async function correctOrderImportDates(request, response) {
     if (mode === 'preview') return sendJson(response, 200, preview);
     for (const change of changes) { const { error } = await adminClient.from('orders').update(change.payload).eq('id', change.id); if (error) throw new Error(`修正订单 ${change.orderNumber} 失败：${error.message}`); }
     await writeAudit(actor.id, 'order_import_batch', batch.id, 'correct_import_dates', null, { sourceIdentifier, changedOrders: preview.changedOrders, changedFields: preview.changedFields });
+    dashboardOverviewCache.clear();
     sendJson(response, 200, { ...preview, message: changes.length ? `已修正 ${changes.length} 个订单的 ${preview.changedFields} 个日期字段。` : '该批次日期已正确，无需修改。' });
   } catch (error) { adminError(response, error); }
 }
@@ -1180,6 +1182,7 @@ async function importOrderDetailV3(request, response) {
       const { error: completeError } = await adminClient.from('order_import_batches').update({ success_rows: insertCount + updateCount, updated_rows: updateCount, skipped_rows: skipCount, validation_status: 'completed' }).eq('id', batch.id);
       if (completeError) throw new Error('更新导入批次状态失败');
       await writeAudit(actor.id, 'order_import', batch.id, 'commit_order_import', null, { ...preview, batchCode });
+      dashboardOverviewCache.clear();
       sendJson(response, 200, { ...preview, batch: { ...batch, validation_status: 'completed' }, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条。` });
     } catch (error) {
       await adminClient.from('order_import_batches').update({ validation_status: 'partial', failure_summary: [{ reason: error.message || '写入中断' }] }).eq('id', batch.id);
@@ -1715,7 +1718,9 @@ async function listBusinessDashboardOverview(request, response) {
     const items = [];
     const pageSize = 1000;
     for (let offset = 0; ; offset += pageSize) {
-      const page = await readWithRetries(() => adminClient.from('order_items').select('id, product_code, seller_sku, sku_id, product_name, quantity, cancellation_return_type, currency_code, sku_subtotal_after_discount, shipping_fee_after_discount, payment_platform_discount, orders!inner(id, shop_id, order_number, currency_code, order_status, order_substatus, refund_status, refund_amount, tracking_number, logistics_carrier, delivery_option, warehouse_name, ordered_at, shops!inner(shop_name, country_code))').in('orders.shop_id', safeShopIds).gte('orders.ordered_at', `${start}T00:00:00+00:00`).lte('orders.ordered_at', `${end}T23:59:59.999+00:00`).order('created_at', { ascending: false }).range(offset, offset + pageSize - 1), '读取订单支付金额失败');
+      // 批量导入时多条明细会拥有相同 created_at；必须以唯一 id 作为次排序，
+      // 才能避免 offset 分页在边界处重复或遗漏记录。
+      const page = await readWithRetries(() => adminClient.from('order_items').select('id, product_code, seller_sku, sku_id, product_name, quantity, cancellation_return_type, currency_code, sku_subtotal_after_discount, shipping_fee_after_discount, payment_platform_discount, orders!inner(id, shop_id, order_number, currency_code, order_status, order_substatus, refund_status, refund_amount, tracking_number, logistics_carrier, delivery_option, warehouse_name, ordered_at, shops!inner(shop_name, country_code))').in('orders.shop_id', safeShopIds).gte('orders.ordered_at', `${start}T00:00:00+00:00`).lte('orders.ordered_at', `${end}T23:59:59.999+00:00`).order('created_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + pageSize - 1), '读取订单支付金额失败');
       items.push(...(page.data || []));
       if ((page.data || []).length < pageSize) break;
     }
