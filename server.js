@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ExcelJS = require('exceljs');
 
@@ -25,6 +26,8 @@ const DASHBOARD_ALERTS_CACHE_TTL = 60 * 1000;
 // are deliberately split into small chunks so files larger than the old 5,000
 // row display threshold are fully processed instead of being silently cut off.
 const BILL_IMPORT_WRITE_BATCH_SIZE = 200;
+const BILL_ROLLBACK_RETENTION_DAYS = 30;
+const IMPORT_ARCHIVE_BUCKET = 'import-archives';
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 const authClient = supabaseUrl && supabasePublishableKey
@@ -68,6 +71,34 @@ async function refreshRates(quote) {
   try { return await pending; } finally { inFlight.delete(quote); }
 }
 function sendJson(response, status, data) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store, max-age=0' }); response.end(JSON.stringify(data)); }
+function archiveFilePayload(fileBase64, fallbackFileName = 'import.xlsx') {
+  const value = String(fileBase64 || '');
+  if (!value) return null;
+  const [, contentType = 'application/octet-stream', raw = value] = value.match(/^data:([^;,]+);base64,(.+)$/s) || [];
+  const buffer = Buffer.from(raw, 'base64');
+  if (!buffer.length) return null;
+  return { buffer, contentType, fileName: String(fallbackFileName || 'import.xlsx').replace(/[\\/:*?"<>|]/g, '_').slice(-160), sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+}
+function rollbackExpiry() { return new Date(Date.now() + BILL_ROLLBACK_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString(); }
+async function archiveImportSource({ batch, fileBase64, fileName, rowCount, actorId }) {
+  const source = archiveFilePayload(fileBase64, fileName);
+  if (!source) throw new Error('未取得原始导入文件，无法建立安全归档');
+  const archivePath = `${new Date().toISOString().slice(0, 10)}/${batch.batch_code}/${source.sha256.slice(0, 16)}-${source.fileName}`;
+  const { error: uploadError } = await adminClient.storage.from(IMPORT_ARCHIVE_BUCKET).upload(archivePath, source.buffer, { contentType: source.contentType, upsert: false });
+  if (uploadError) throw new Error(`保存原始导入文件失败：${uploadError.message || '文件存储不可用'}`);
+  const { data, error } = await adminClient.from('import_archives').insert({ batch_id: batch.id, storage_path: archivePath, source_file_name: source.fileName, source_content_type: source.contentType, byte_size: source.buffer.length, sha256: source.sha256, row_count: rowCount || null, archived_by: actorId }).select().single();
+  if (error) { await adminClient.storage.from(IMPORT_ARCHIVE_BUCKET).remove([archivePath]); throw new Error(`保存归档索引失败：${error.message || '数据库不可用'}`); }
+  return data;
+}
+async function purgeExpiredBillRollbackSnapshots() {
+  const { data: expired, error } = await adminClient.from('order_import_batches').select('id').in('import_type', ['settled_bills', 'unsettled_bills']).lt('rollback_expires_at', new Date().toISOString()).eq('validation_status', 'completed');
+  if (error) throw new Error(`读取过期回滚批次失败：${error.message || '数据库不可用'}`);
+  const ids = (expired || []).map(item => item.id);
+  if (!ids.length) return 0;
+  const { error: deleteError, count } = await adminClient.from('tiktok_bill_import_changes').delete({ count: 'exact' }).in('batch_id', ids);
+  if (deleteError) throw new Error(`清理过期回滚快照失败：${deleteError.message || '数据库不可用'}`);
+  return count || 0;
+}
 function readJson(request) {
   return new Promise((resolve, reject) => {
     let body = ''; let tooLarge = false;
@@ -694,6 +725,23 @@ async function productNamesByCode(codeBySku) {
   }
   return nameByCode;
 }
+async function settlementShopFilterOptions(tab, includeSuperseded, scopedShopIds = null) {
+  let shopsQuery = adminClient.from('shops').select('id, shop_name').order('shop_name', { ascending: true });
+  if (scopedShopIds !== null) shopsQuery = shopsQuery.in('id', scopedShopIds.length ? scopedShopIds : ['00000000-0000-0000-0000-000000000000']);
+  const { data: visibleShops, error: shopsError } = await shopsQuery;
+  if (shopsError) throw new Error('读取结算单店铺筛选项失败');
+
+  const applicableShops = await Promise.all((visibleShops || []).map(async shop => {
+    let recordsQuery = adminClient.from('tiktok_bill_records').select('id', { count: 'exact', head: true }).eq('shop_id', shop.id);
+    if (tab === 'settled') recordsQuery = recordsQuery.eq('source_type', 'settled').eq('replacement_status', 'active');
+    else if (tab === 'review') recordsQuery = recordsQuery.eq('replacement_status', 'needs_review');
+    else recordsQuery = recordsQuery.eq('source_type', 'unsettled').in('replacement_status', includeSuperseded ? ['active', 'superseded'] : ['active']);
+    const { count, error } = await recordsQuery;
+    if (error) throw new Error('读取结算单店铺筛选项失败');
+    return count ? shop.shop_name : null;
+  }));
+  return applicableShops.filter(Boolean);
+}
 async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = null) {
   const page = Math.max(1, Number(requestUrl.searchParams.get('page')) || 1);
   const requestedSize = Number(requestUrl.searchParams.get('pageSize')) || 20;
@@ -718,7 +766,11 @@ async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = nu
   const dateColumn = tab === 'settled' ? 'settlement_date' : tab === 'unsettled' ? 'transaction_created_at' : 'created_at';
   if (start) query = query.gte(dateColumn, start);
   if (end) query = query.lte(dateColumn, dateColumn === 'settlement_date' ? end : `${end}T23:59:59.999+00:00`);
-  const { data, error, count } = await query.range((page - 1) * pageSize, page * pageSize - 1);
+  const [pageResult, settlementShops] = await Promise.all([
+    query.range((page - 1) * pageSize, page * pageSize - 1),
+    settlementShopFilterOptions(tab, includeSuperseded, scopedShopIds)
+  ]);
+  const { data, error, count } = pageResult;
   if (error) throw new Error(`读取结算单数据失败：${error.message || '数据库查询失败'}`);
   const codeBySku = await productCodesBySettlementSku(data, scopedShopIds);
   const nameByCode = await productNamesByCode(codeBySku);
@@ -727,10 +779,10 @@ async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = nu
   if (isExport) { const csv = [['数据来源','利润状态','店铺简称','国家站点','订单创建日期','相关订单 ID','SKU ID','商品名称','数量','预计/结算金额','总收入','总费用','导入状态'], ...(data || []).map(item => [item.source_type === 'settled' ? '已结算账单' : '未结算账单', item.replacement_status, item.shops?.shop_name || '', item.shops?.country_code || '', item.transaction_created_at?.slice(0, 10) || item.settlement_date || '', item.related_order_id || '', item.sku_id || '', productNameFor(item), item.quantity || 0, billDisplayAmount(item), item.total_income || 0, item.total_fees || 0, item.source_type])].map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n'); response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="tiktok-bills.csv"' }); response.end(`\uFEFF${csv}`); return; }
   if (isLight) {
     const totalRows = count || 0;
-    return sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [] }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: 1 } });
+    return sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [], settlementShops }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: 1 } });
   }
   const totalRows = count || 0;
-  sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [] }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) } });
+  sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [], settlementShops }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) } });
 }
 async function listPaginatedOrderSettlementManagementData(request, response, scopedShopIds = null) {
   try {
@@ -812,7 +864,7 @@ async function parseSpreadsheetRows(fileBase64) {
   if (!headerRowNumber) throw new Error('未找到账单表头：请确认文件包含“交易类型、订单ID/调整单ID、SKU ID”字段');
   const headers = []; sheet.getRow(headerRowNumber).eachCell({ includeEmpty: true }, (cell, column) => { headers[column] = String(cell.text || '').replace(/^\uFEFF/, '').trim(); });
   const rows = [];
-  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => { if (rowNumber <= headerRowNumber) return; const record = {}; let hasValue = false; headers.forEach((header, column) => { if (!header) return; const value = row.getCell(column).value; const normalized = value instanceof Date ? value.toISOString() : String(row.getCell(column).text || '').trim(); record[header] = normalized; if (normalized) hasValue = true; }); if (hasValue) rows.push(record); });
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => { if (rowNumber <= headerRowNumber) return; const record = {}; let hasValue = false; headers.forEach((header, column) => { if (!header) return; const value = row.getCell(column).value; const normalized = value instanceof Date ? value.toISOString() : String(row.getCell(column).text || '').trim(); record[header] = normalized; if (normalized) hasValue = true; }); if (hasValue) { Object.defineProperty(record, '__sourceRowNumber', { value: rowNumber, enumerable: false }); rows.push(record); } });
   return rows;
 }
 function normalizeBillDate(value, fieldName) {
@@ -854,8 +906,9 @@ function billImportRow(row, sourceType, shop) {
   if (sourceType === 'unsettled' && item.settlementAmount === null) throw new Error('未结算账单缺少预计结算金额');
   item.matchKey = billMatchKey(item); item.sourceFingerprint = billSourceFingerprint(item); return item;
 }
-function billPayload(item, shop, batchId, replacementStatus = null) {
-  return { shop_id: shop.id, source_type: item.sourceType, source_fingerprint: item.sourceFingerprint, transaction_type: item.transactionType, transaction_id: item.transactionId, related_order_id: item.relatedOrderId, sku_id: item.skuId, product_name: item.productName, sku_name: item.skuName, quantity: item.quantity, currency_code: item.currencyCode, settlement_document_id: item.settlementDocumentId, settlement_date: item.settlementDate?.slice(0, 10) || null, transaction_created_at: item.transactionCreatedAt, estimated_settlement_at: item.estimatedSettlementAt, unsettled_reason: item.unsettledReason, settlement_amount: item.settlementAmount, total_income: item.totalIncome, total_fees: item.totalFees, fee_breakdown: item.feeBreakdown, raw_data: item.rawData, import_batch_id: batchId, replacement_status: replacementStatus || (item.matchKey ? 'active' : 'needs_review') };
+function billPayload(item, shop, batchId, replacementStatus = null, archive = null) {
+  const archiveReference = archive ? { archived: true, archive_id: archive.id, archive_path: archive.storage_path, source_file_name: archive.source_file_name } : item.rawData;
+  return { shop_id: shop.id, source_type: item.sourceType, source_fingerprint: item.sourceFingerprint, transaction_type: item.transactionType, transaction_id: item.transactionId, related_order_id: item.relatedOrderId, sku_id: item.skuId, product_name: item.productName, sku_name: item.skuName, quantity: item.quantity, currency_code: item.currencyCode, settlement_document_id: item.settlementDocumentId, settlement_date: item.settlementDate?.slice(0, 10) || null, transaction_created_at: item.transactionCreatedAt, estimated_settlement_at: item.estimatedSettlementAt, unsettled_reason: item.unsettledReason, settlement_amount: item.settlementAmount, total_income: item.totalIncome, total_fees: item.totalFees, fee_breakdown: item.feeBreakdown, raw_data: archiveReference, import_batch_id: batchId, replacement_status: replacementStatus || (item.matchKey ? 'active' : 'needs_review') };
 }
 function billChanges(existing, item) {
   const fields = [['结算金额', 'settlement_amount', item.settlementAmount], ['总收入', 'total_income', item.totalIncome], ['总费用', 'total_fees', item.totalFees], ['结算日期', 'settlement_date', item.settlementDate?.slice(0, 10) || null], ['预计结算时间', 'estimated_settlement_at', item.estimatedSettlementAt], ['未结算原因', 'unsettled_reason', item.unsettledReason]];
@@ -903,7 +956,7 @@ async function importTiktokBills(request, response) {
     if (!rows.length) throw new Error('文件中没有可导入的数据'); if (!/^[0-9a-f-]{36}$/i.test(shopId)) throw new Error('请选择有效店铺');
     const { data: shop, error: shopError } = await adminClient.from('shops').select('id, shop_code, shop_name, country_code, currency_code').eq('id', shopId).eq('is_active', true).single(); if (shopError || !shop) throw new Error('请选择启用中的店铺');
     const validRows = [], failures = [], seen = new Set();
-    rows.forEach((row, index) => { try { const item = billImportRow(row, sourceType, shop); if (seen.has(item.sourceFingerprint)) throw new Error(sourceType === 'settled' ? '文件内存在重复的结算单 ID + 相关订单 ID + SKU ID + 结算总金额' : '文件内存在重复的交易类型 + 订单/调整单 ID + SKU ID'); seen.add(item.sourceFingerprint); validRows.push(item); } catch (error) { failures.push({ row: index + 2, reason: error.message || '数据无效' }); } });
+    rows.forEach((row, index) => { try { const item = billImportRow(row, sourceType, shop); if (seen.has(item.sourceFingerprint)) throw new Error(sourceType === 'settled' ? '文件内存在重复的结算单 ID + 相关订单 ID + SKU ID + 结算总金额' : '文件内存在重复的交易类型 + 订单/调整单 ID + SKU ID'); seen.add(item.sourceFingerprint); validRows.push(item); } catch (error) { failures.push({ row: Number(row?.__sourceRowNumber) || index + 2, reason: error.message || '数据无效' }); } });
     if (failures.length) return sendJson(response, 200, { valid: false, sourceType, totalRows: rows.length, failures: failures.slice(0, 100), message: '校验未通过：请修正失败行后重新上传，系统未写入任何数据。' });
     const fingerprints = validRows.map(item => item.sourceFingerprint); const transactionIds = [...new Set(validRows.map(item => item.transactionId))];
     const [sameSource, related, batchResult] = await Promise.all([
@@ -920,11 +973,12 @@ async function importTiktokBills(request, response) {
     const writeBatchCount = Math.ceil((insertCount + updateCount) / BILL_IMPORT_WRITE_BATCH_SIZE);
     const preview = { valid: true, sourceType, mode, batchCode, shop: { id: shop.id, code: shop.shop_code, name: shop.shop_name, countryCode: shop.country_code, currencyCode: shop.currency_code }, totalRows: rows.length, writeBatchSize: BILL_IMPORT_WRITE_BATCH_SIZE, writeBatchCount, insertCount, updateCount, skipCount, replaceCount, reviewCount, changeDetails: changeDetails.slice(0, 50) };
     if (mode === 'preview') return sendJson(response, 200, preview);
-    const { data: batch, error: batchError } = await adminClient.from('order_import_batches').insert({ batch_code: batchCode, import_type: sourceType === 'settled' ? 'settled_bills' : 'unsettled_bills', file_name: fileName, shop_id: shop.id, country_code: shop.country_code, currency_code: shop.currency_code, total_rows: rows.length, success_rows: 0, updated_rows: 0, skipped_rows: skipCount, failed_rows: 0, failure_summary: [], validation_status: 'processing', imported_by: actor.id }).select().single(); if (batchError) throw new Error('创建账单导入批次失败');
+    const { data: batch, error: batchError } = await adminClient.from('order_import_batches').insert({ batch_code: batchCode, import_type: sourceType === 'settled' ? 'settled_bills' : 'unsettled_bills', file_name: fileName, shop_id: shop.id, country_code: shop.country_code, currency_code: shop.currency_code, total_rows: rows.length, success_rows: 0, updated_rows: 0, skipped_rows: skipCount, failed_rows: 0, failure_summary: [], validation_status: 'processing', rollback_expires_at: rollbackExpiry(), imported_by: actor.id }).select().single(); if (batchError) throw new Error('创建账单导入批次失败');
     try {
+      const archive = await archiveImportSource({ batch, fileBase64: body.fileBase64, fileName, rowCount: rows.length, actorId: actor.id });
       const changed = validRows.filter(item => { const existing = sameByFingerprint.get(item.sourceFingerprint); return !existing || billChanges(existing, item).length; });
       if (changed.length) {
-        const payloads = changed.map(item => billPayload(item, shop, batch.id));
+        const payloads = changed.map(item => billPayload(item, shop, batch.id, null, archive));
         for (let offset = 0; offset < payloads.length; offset += BILL_IMPORT_WRITE_BATCH_SIZE) {
           const { error } = await adminClient.from('tiktok_bill_records').upsert(payloads.slice(offset, offset + BILL_IMPORT_WRITE_BATCH_SIZE), { onConflict: 'shop_id,source_type,source_fingerprint' });
           if (error) throw new Error(`保存账单明细失败：${error.message}`);
@@ -946,6 +1000,9 @@ async function importTiktokBills(request, response) {
         if (changesError) throw new Error(`保存账单回滚快照失败：${changesError.message || '数据库写入失败'}`);
       }
       const { error: completeError } = await adminClient.from('order_import_batches').update({ success_rows: insertCount + updateCount, updated_rows: updateCount, skipped_rows: skipCount, validation_status: 'completed' }).eq('id', batch.id); if (completeError) throw completeError;
+      const purgedRollbackSnapshots = await purgeExpiredBillRollbackSnapshots();
+      preview.archive = { id: archive.id, fileName: archive.source_file_name, bytes: archive.byte_size, sha256: archive.sha256 };
+      preview.purgedRollbackSnapshots = purgedRollbackSnapshots;
       await writeAudit(actor.id, 'tiktok_bill_import', batch.id, 'commit_tiktok_bill_import', null, preview); dashboardOverviewCache.clear(); sendJson(response, 200, { ...preview, batch, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条；替代预估 ${replaceCount} 条，待核对 ${reviewCount} 条。` });
     } catch (error) { await adminClient.from('order_import_batches').update({ validation_status: 'partial', failure_summary: [{ reason: error.message || '写入中断' }] }).eq('id', batch.id); throw error; }
   } catch (error) { adminError(response, error); }
@@ -955,7 +1012,7 @@ async function manageBillBatch(request, response) {
     const actor = await requireAdministrator(request); const body = await readJson(request); const batchId = String(body.batchId || ''); if (!/^[0-9a-f-]{36}$/i.test(batchId)) throw new Error('导入批次参数无效');
     const { data: batch, error: batchError } = await adminClient.from('order_import_batches').select('*').eq('id', batchId).in('import_type', ['settled_bills', 'unsettled_bills']).single(); if (batchError || !batch) throw new Error('未找到账单导入批次');
     if (body.action === 'delete') { if (batch.validation_status !== 'rolled_back') throw new Error('请先安全回滚该批次，才可删除导入记录'); const { data: records } = await adminClient.from('tiktok_bill_records').select('id').eq('import_batch_id', batchId).limit(1); if (records?.length) throw new Error('该批次仍有关联账单，不能删除'); const { error } = await adminClient.from('order_import_batches').delete().eq('id', batchId); if (error) throw error; return sendJson(response, 200, { message: '已删除回滚后的导入记录' }); }
-    if (batch.validation_status !== 'completed') throw new Error('仅已完成的批次可回滚'); const { data: changes, error: changesError } = await adminClient.from('tiktok_bill_import_changes').select('*').eq('batch_id', batchId).order('created_at', { ascending: false }); if (changesError) throw changesError; if (!changes?.length) throw new Error('该历史批次没有回滚快照，无法安全回滚');
+    if (batch.validation_status !== 'completed') throw new Error('仅已完成的批次可回滚'); if (batch.rollback_expires_at && new Date(batch.rollback_expires_at).getTime() < Date.now()) throw new Error('该批次已超过 30 天安全回滚期，请从原始归档文件重新导入'); const { data: changes, error: changesError } = await adminClient.from('tiktok_bill_import_changes').select('*').eq('batch_id', batchId).order('created_at', { ascending: false }); if (changesError) throw changesError; if (!changes?.length) throw new Error('该历史批次没有回滚快照，无法安全回滚');
     const inserted = changes.filter(item => item.operation === 'insert').map(item => item.record_id).filter(Boolean); if (inserted.length) { const { data: current } = await adminClient.from('tiktok_bill_records').select('id, import_batch_id').in('id', inserted); if ((current || []).some(item => item.import_batch_id !== batchId)) throw new Error('该批次记录已被后续导入更新，不能安全回滚'); }
     for (const change of changes) { if (change.operation === 'insert') { const { error } = await adminClient.from('tiktok_bill_records').delete().eq('id', change.record_id).eq('import_batch_id', batchId); if (error) throw error; } else if (change.before_data) { const { id, created_at, updated_at, ...restore } = change.before_data; const { error } = await adminClient.from('tiktok_bill_records').update(restore).eq('id', change.record_id); if (error) throw error; } }
     const { error: statusError } = await adminClient.from('order_import_batches').update({ validation_status: 'rolled_back' }).eq('id', batchId); if (statusError) throw statusError; await writeAudit(actor.id, 'tiktok_bill_import', batchId, 'rollback_tiktok_bill_import', batch, null); dashboardOverviewCache.clear(); sendJson(response, 200, { message: `已安全回滚批次 ${batch.batch_code}` });
