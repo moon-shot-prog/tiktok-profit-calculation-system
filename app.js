@@ -217,6 +217,7 @@ document.querySelector('#togglePassword').addEventListener('click', event => {
 document.querySelector('#loginButton').addEventListener('click', login);
 document.querySelector('#initializeButton').addEventListener('click', () => window.alert('管理员已初始化；该入口已关闭。'));
 document.querySelector('#forgotPassword').addEventListener('click', () => openDialog('reset'));
+document.querySelector('#closeAuthDialog').addEventListener('click', () => { recoveryAccessToken = ''; dialog.close(); });
 dialogForm.addEventListener('submit', async event => {
   event.preventDefault();
   if (dialogMode === 'recovery') {
