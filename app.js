@@ -13,6 +13,7 @@ const dialogTitle = document.querySelector('#dialogTitle');
 const dialogDescription = document.querySelector('#dialogDescription');
 const dialogAccount = document.querySelector('#dialogAccount');
 const dialogPassword = document.querySelector('#dialogPassword');
+const dialogPasswordConfirm = document.querySelector('#dialogPasswordConfirm');
 const dialogSubmit = document.querySelector('#dialogSubmit');
 const dialogMessage = document.querySelector('#dialogMessage');
 const AUTH_SESSION_KEY = 'tiktokShopAuthSession';
@@ -21,6 +22,7 @@ const AUTH_REFRESH_LEEWAY = 5 * 60 * 1000;
 const AUTH_ACTIVE_REFRESH_WINDOW = 15 * 60 * 1000;
 const nativeFetch = window.fetch.bind(window);
 let dialogMode = '';
+let recoveryAccessToken = '';
 let currentWorkspaceRole = '';
 let sessionRefreshTimer = null;
 
@@ -181,13 +183,30 @@ async function login() {
   }
 }
 function openDialog(mode) {
-  dialogMode = mode; dialogAccount.value = ''; dialogPassword.value = ''; dialogMessage.textContent = '';
-  dialogAccount.disabled = false;
+  dialogMode = mode; recoveryAccessToken = ''; dialogAccount.value = ''; dialogPassword.value = ''; dialogPasswordConfirm.value = ''; dialogMessage.textContent = '';
+  dialogAccount.disabled = false; dialogAccount.classList.remove('is-hidden'); dialogAccount.previousElementSibling.classList.remove('is-hidden');
   const copy = ['忘记密码', '输入已验证的邮箱后，系统将发送密码重置链接。手机号重置将在短信服务配置后开放。', '发送重置链接'];
   [dialogTitle.textContent, dialogDescription.textContent, dialogSubmit.textContent] = copy;
   dialogPassword.classList.add('is-hidden');
   dialogPassword.previousElementSibling.classList.add('is-hidden');
+  dialogPasswordConfirm.classList.add('is-hidden');
+  dialogPasswordConfirm.previousElementSibling.classList.add('is-hidden');
   dialog.showModal();
+}
+function openPasswordRecoveryDialog(accessToken) {
+  dialogMode = 'recovery'; recoveryAccessToken = accessToken;
+  dialogAccount.value = ''; dialogAccount.disabled = true; dialogPassword.value = ''; dialogPasswordConfirm.value = ''; dialogMessage.textContent = '';
+  dialogTitle.textContent = '设置新密码';
+  dialogDescription.textContent = '请设置新密码。完成后请使用新密码登录系统。';
+  dialogSubmit.textContent = '确认并更新密码';
+  dialogAccount.classList.add('is-hidden');
+  dialogAccount.previousElementSibling.classList.add('is-hidden');
+  dialogPassword.classList.remove('is-hidden');
+  dialogPassword.previousElementSibling.classList.remove('is-hidden');
+  dialogPasswordConfirm.classList.remove('is-hidden');
+  dialogPasswordConfirm.previousElementSibling.classList.remove('is-hidden');
+  dialog.showModal();
+  dialogPassword.focus();
 }
 
 account.addEventListener('input', describeAccount);
@@ -199,11 +218,26 @@ document.querySelector('#loginButton').addEventListener('click', login);
 document.querySelector('#initializeButton').addEventListener('click', () => window.alert('管理员已初始化；该入口已关闭。'));
 document.querySelector('#forgotPassword').addEventListener('click', () => openDialog('reset'));
 dialogForm.addEventListener('submit', async event => {
-  event.preventDefault(); const identity = dialogAccount.value.trim();
+  event.preventDefault();
+  if (dialogMode === 'recovery') {
+    if (dialogPassword.value.length < 8) return dialogMessage.textContent = '新密码至少需要 8 位';
+    if (dialogPassword.value !== dialogPasswordConfirm.value) return dialogMessage.textContent = '两次输入的密码不一致';
+    dialogSubmit.disabled = true;
+    try {
+      const nextPassword = dialogPassword.value;
+      const result = await requestJson('/api/auth/password-update', { accessToken: recoveryAccessToken, password: nextPassword });
+      dialog.close(); recoveryAccessToken = ''; password.value = nextPassword;
+      formMessage.textContent = result.message;
+    } catch (error) {
+      dialogMessage.textContent = error.message;
+    } finally { dialogSubmit.disabled = false; }
+    return;
+  }
+  const identity = dialogAccount.value.trim();
   if (!validAccount(identity)) return dialogMessage.textContent = '请输入有效的邮箱或手机号';
   dialogSubmit.disabled = true;
   try {
-    const result = await requestJson('/api/auth/password-reset', { identity, redirectTo: `${location.origin}${location.pathname}` });
+    const result = await requestJson('/api/auth/password-reset', { identity, redirectTo: `${location.origin}${location.pathname}?password-recovery=1` });
     dialogMessage.textContent = result.message;
   } catch (error) {
     dialogMessage.textContent = error.message;
@@ -230,6 +264,13 @@ document.querySelector('#enterAdminWorkspace')?.addEventListener('click', return
 document.querySelector('#returnAdminWorkspace')?.addEventListener('click', returnToAdminWorkspace);
 updateInitialization();
 if (location.protocol === 'file:') formMessage.textContent = '当前为文件预览模式。请在浏览器打开 http://localhost:3000 后登录。';
+const recoveryParameters = new URLSearchParams(location.hash.startsWith('#') ? location.hash.slice(1) : '');
+const recoveryToken = recoveryParameters.get('access_token');
+if (recoveryParameters.get('type') === 'recovery' && recoveryToken) {
+  // Keep the recovery token in memory only and immediately remove it from the address bar.
+  history.replaceState(null, document.title, location.pathname);
+  openPasswordRecoveryDialog(recoveryToken);
+}
 const remembered = readAuthSession();
 if (remembered && sessionIsInactive(remembered)) {
   showSessionExpired('超过 8 小时未操作，登录状态已失效，请重新登录');

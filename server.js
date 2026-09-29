@@ -173,6 +173,22 @@ async function handlePasswordReset(request, response) {
     return sendJson(response, 400, { message: error.message || '无法发送重置邮件' });
   }
 }
+async function handlePasswordUpdate(request, response) {
+  if (!authClient || !adminClient) return sendJson(response, 503, { message: 'Supabase 配置不完整，请检查 .env' });
+  try {
+    const { accessToken, password } = await readJson(request);
+    const nextPassword = String(password || '');
+    if (!accessToken) return sendJson(response, 401, { message: '重置链接已失效，请重新申请新的链接' });
+    if (nextPassword.length < 8) return sendJson(response, 400, { message: '新密码至少需要 8 位' });
+    const { data: userData, error: userError } = await authClient.auth.getUser(accessToken);
+    if (userError || !userData.user) return sendJson(response, 401, { message: '重置链接已失效，请重新申请新的链接' });
+    const { error: updateError } = await adminClient.auth.admin.updateUserById(userData.user.id, { password: nextPassword });
+    if (updateError) throw updateError;
+    return sendJson(response, 200, { message: '密码已更新，请使用新密码登录' });
+  } catch (error) {
+    return sendJson(response, 400, { message: error.message || '密码更新失败，请重新申请重置链接' });
+  }
+}
 async function handleSession(request, response) {
   if (!authClient) return sendJson(response, 503, { message: 'Supabase 配置不完整，请检查 .env' });
   try {
@@ -2572,6 +2588,7 @@ http.createServer(async (request, response) => {
   }
   if (url.pathname === '/api/auth/login' && request.method === 'POST') return handleLogin(request, response);
   if (url.pathname === '/api/auth/password-reset' && request.method === 'POST') return handlePasswordReset(request, response);
+  if (url.pathname === '/api/auth/password-update' && request.method === 'POST') return handlePasswordUpdate(request, response);
   if (url.pathname === '/api/auth/session' && request.method === 'POST') return handleSession(request, response);
   if (url.pathname === '/api/auth/refresh' && request.method === 'POST') return handleSessionRefresh(request, response);
   if (url.pathname === '/api/admin/data' && request.method === 'GET') return listAdminData(request, response);
