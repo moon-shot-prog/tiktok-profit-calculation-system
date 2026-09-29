@@ -891,7 +891,15 @@ function normalizeBillDate(value, fieldName) {
 function normalizedBillKey(value) { return String(value || '').trim().toLowerCase().replace(/\s+/g, ' '); }
 function billMatchKey(item) { return item.skuId ? `${normalizedBillKey(item.transactionType)}::${normalizedBillKey(item.transactionId)}::${normalizedBillKey(item.skuId)}` : ''; }
 function billSourceFingerprint(item) { if (item.sourceType === 'settled') return [item.settlementDocumentId, item.relatedOrderId, item.skuId, item.settlementAmount].map(normalizedBillKey).join('::'); return billMatchKey(item) || `${normalizedBillKey(item.transactionType)}::${normalizedBillKey(item.transactionId)}::no-sku`; }
-function billAmount(row, ...keys) { const value = importValue(row, ...keys); if (!value) return null; const number = Number(value.replace(/,/g, '')); if (!Number.isFinite(number)) throw new Error(`${keys[0]} 金额格式无效`); return number; }
+function billAmount(row, ...keys) {
+  const value = importValue(row, ...keys);
+  // TikTok exports use these placeholders for optional fee columns. They are
+  // not amounts, so keep them absent instead of rejecting an otherwise valid bill.
+  if (!value || ['—', '–', '-', '/', 'N/A', 'n/a', 'NULL', 'null'].includes(value)) return null;
+  const number = Number(value.replace(/,/g, ''));
+  if (!Number.isFinite(number)) throw new Error(`${keys[0]} 金额格式无效`);
+  return number;
+}
 function billImportRow(row, sourceType, shop) {
   const transactionType = importValue(row, '交易类型', 'Transaction Type', 'transaction_type');
   const transactionId = importValue(row, '订单ID/调整单ID', '订单 ID/调整单 ID', 'Order ID/Adjustment ID', 'transaction_id');
