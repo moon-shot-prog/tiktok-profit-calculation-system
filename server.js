@@ -1,7 +1,6 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const ExcelJS = require('exceljs');
 
@@ -27,7 +26,6 @@ const DASHBOARD_ALERTS_CACHE_TTL = 60 * 1000;
 // row display threshold are fully processed instead of being silently cut off.
 const BILL_IMPORT_WRITE_BATCH_SIZE = 200;
 const BILL_ROLLBACK_RETENTION_DAYS = 30;
-const IMPORT_ARCHIVE_BUCKET = 'import-archives';
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 const authClient = supabaseUrl && supabasePublishableKey
@@ -71,33 +69,24 @@ async function refreshRates(quote) {
   try { return await pending; } finally { inFlight.delete(quote); }
 }
 function sendJson(response, status, data) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store, max-age=0' }); response.end(JSON.stringify(data)); }
-function archiveFilePayload(fileBase64, fallbackFileName = 'import.xlsx') {
-  const value = String(fileBase64 || '');
-  if (!value) return null;
-  const [, contentType = 'application/octet-stream', raw = value] = value.match(/^data:([^;,]+);base64,(.+)$/s) || [];
-  const buffer = Buffer.from(raw, 'base64');
-  if (!buffer.length) return null;
-  return { buffer, contentType, fileName: String(fallbackFileName || 'import.xlsx').replace(/[\\/:*?"<>|]/g, '_').slice(-160), sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
-}
 function rollbackExpiry() { return new Date(Date.now() + BILL_ROLLBACK_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString(); }
-async function archiveImportSource({ batch, fileBase64, fileName, rowCount, actorId }) {
-  const source = archiveFilePayload(fileBase64, fileName);
-  if (!source) throw new Error('未取得原始导入文件，无法建立安全归档');
-  const archivePath = `${new Date().toISOString().slice(0, 10)}/${batch.batch_code}/${source.sha256.slice(0, 16)}-${source.fileName}`;
-  const { error: uploadError } = await adminClient.storage.from(IMPORT_ARCHIVE_BUCKET).upload(archivePath, source.buffer, { contentType: source.contentType, upsert: false });
-  if (uploadError) throw new Error(`保存原始导入文件失败：${uploadError.message || '文件存储不可用'}`);
-  const { data, error } = await adminClient.from('import_archives').insert({ batch_id: batch.id, storage_path: archivePath, source_file_name: source.fileName, source_content_type: source.contentType, byte_size: source.buffer.length, sha256: source.sha256, row_count: rowCount || null, archived_by: actorId }).select().single();
-  if (error) { await adminClient.storage.from(IMPORT_ARCHIVE_BUCKET).remove([archivePath]); throw new Error(`保存归档索引失败：${error.message || '数据库不可用'}`); }
-  return data;
-}
-async function purgeExpiredBillRollbackSnapshots() {
-  const { data: expired, error } = await adminClient.from('order_import_batches').select('id').in('import_type', ['settled_bills', 'unsettled_bills']).lt('rollback_expires_at', new Date().toISOString()).eq('validation_status', 'completed');
+async function purgeExpiredImportRollbackSnapshots() {
+  const { data: expired, error } = await adminClient.from('order_import_batches').select('id, import_type').in('import_type', ['orders', 'settled_bills', 'unsettled_bills']).lt('rollback_expires_at', new Date().toISOString()).eq('validation_status', 'completed');
   if (error) throw new Error(`读取过期回滚批次失败：${error.message || '数据库不可用'}`);
-  const ids = (expired || []).map(item => item.id);
-  if (!ids.length) return 0;
-  const { error: deleteError, count } = await adminClient.from('tiktok_bill_import_changes').delete({ count: 'exact' }).in('batch_id', ids);
-  if (deleteError) throw new Error(`清理过期回滚快照失败：${deleteError.message || '数据库不可用'}`);
-  return count || 0;
+  const billIds = (expired || []).filter(item => item.import_type !== 'orders').map(item => item.id);
+  const orderIds = (expired || []).filter(item => item.import_type === 'orders').map(item => item.id);
+  let total = 0;
+  if (billIds.length) {
+    const { error: deleteError, count } = await adminClient.from('tiktok_bill_import_changes').delete({ count: 'exact' }).in('batch_id', billIds);
+    if (deleteError) throw new Error(`清理账单回滚快照失败：${deleteError.message || '数据库不可用'}`);
+    total += count || 0;
+  }
+  if (orderIds.length) {
+    const { error: deleteError, count } = await adminClient.from('order_import_changes').delete({ count: 'exact' }).in('batch_id', orderIds);
+    if (deleteError) throw new Error(`清理订单回滚快照失败：${deleteError.message || '数据库不可用'}`);
+    total += count || 0;
+  }
+  return total;
 }
 function readJson(request) {
   return new Promise((resolve, reject) => {
@@ -930,8 +919,10 @@ function billImportRow(row, sourceType, shop) {
   if (sourceType === 'unsettled' && item.settlementAmount === null) throw new Error('未结算账单缺少预计结算金额');
   item.matchKey = billMatchKey(item); item.sourceFingerprint = billSourceFingerprint(item); return item;
 }
-function billPayload(item, shop, batchId, replacementStatus = null, archive = null) {
-  const archiveReference = archive ? { archived: true, archive_id: archive.id, archive_path: archive.storage_path, source_file_name: archive.source_file_name } : item.rawData;
+function billPayload(item, shop, batchId, replacementStatus = null, localArchive = null) {
+  // Original Excel is kept by the importer locally; avoid duplicating full
+  // raw rows in Postgres and retain a compact, traceable batch reference.
+  const archiveReference = localArchive ? { archived: false, local_archive_requested: true, import_batch_code: localArchive.batchCode, source_file_name: localArchive.fileName } : item.rawData;
   return { shop_id: shop.id, source_type: item.sourceType, source_fingerprint: item.sourceFingerprint, transaction_type: item.transactionType, transaction_id: item.transactionId, related_order_id: item.relatedOrderId, sku_id: item.skuId, product_name: item.productName, sku_name: item.skuName, quantity: item.quantity, currency_code: item.currencyCode, settlement_document_id: item.settlementDocumentId, settlement_date: item.settlementDate?.slice(0, 10) || null, transaction_created_at: item.transactionCreatedAt, estimated_settlement_at: item.estimatedSettlementAt, unsettled_reason: item.unsettledReason, settlement_amount: item.settlementAmount, total_income: item.totalIncome, total_fees: item.totalFees, fee_breakdown: item.feeBreakdown, raw_data: archiveReference, import_batch_id: batchId, replacement_status: replacementStatus || (item.matchKey ? 'active' : 'needs_review') };
 }
 function billChanges(existing, item) {
@@ -999,10 +990,10 @@ async function importTiktokBills(request, response) {
     if (mode === 'preview') return sendJson(response, 200, preview);
     const { data: batch, error: batchError } = await adminClient.from('order_import_batches').insert({ batch_code: batchCode, import_type: sourceType === 'settled' ? 'settled_bills' : 'unsettled_bills', file_name: fileName, shop_id: shop.id, country_code: shop.country_code, currency_code: shop.currency_code, total_rows: rows.length, success_rows: 0, updated_rows: 0, skipped_rows: skipCount, failed_rows: 0, failure_summary: [], validation_status: 'processing', rollback_expires_at: rollbackExpiry(), imported_by: actor.id }).select().single(); if (batchError) throw new Error('创建账单导入批次失败');
     try {
-      const archive = await archiveImportSource({ batch, fileBase64: body.fileBase64, fileName, rowCount: rows.length, actorId: actor.id });
+      const localArchive = { batchCode: batch.batch_code, fileName };
       const changed = validRows.filter(item => { const existing = sameByFingerprint.get(item.sourceFingerprint); return !existing || billChanges(existing, item).length; });
       if (changed.length) {
-        const payloads = changed.map(item => billPayload(item, shop, batch.id, null, archive));
+        const payloads = changed.map(item => billPayload(item, shop, batch.id, null, localArchive));
         for (let offset = 0; offset < payloads.length; offset += BILL_IMPORT_WRITE_BATCH_SIZE) {
           const { error } = await adminClient.from('tiktok_bill_records').upsert(payloads.slice(offset, offset + BILL_IMPORT_WRITE_BATCH_SIZE), { onConflict: 'shop_id,source_type,source_fingerprint' });
           if (error) throw new Error(`保存账单明细失败：${error.message}`);
@@ -1024,8 +1015,8 @@ async function importTiktokBills(request, response) {
         if (changesError) throw new Error(`保存账单回滚快照失败：${changesError.message || '数据库写入失败'}`);
       }
       const { error: completeError } = await adminClient.from('order_import_batches').update({ success_rows: insertCount + updateCount, updated_rows: updateCount, skipped_rows: skipCount, validation_status: 'completed' }).eq('id', batch.id); if (completeError) throw completeError;
-      const purgedRollbackSnapshots = await purgeExpiredBillRollbackSnapshots();
-      preview.archive = { id: archive.id, fileName: archive.source_file_name, bytes: archive.byte_size, sha256: archive.sha256 };
+      const purgedRollbackSnapshots = await purgeExpiredImportRollbackSnapshots();
+      preview.localArchive = { required: true, fileName, batchCode: batch.batch_code };
       preview.purgedRollbackSnapshots = purgedRollbackSnapshots;
       await writeAudit(actor.id, 'tiktok_bill_import', batch.id, 'commit_tiktok_bill_import', null, preview); dashboardOverviewCache.clear(); sendJson(response, 200, { ...preview, batch, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条；替代预估 ${replaceCount} 条，待核对 ${reviewCount} 条。` });
     } catch (error) { await adminClient.from('order_import_batches').update({ validation_status: 'partial', failure_summary: [{ reason: error.message || '写入中断' }] }).eq('id', batch.id); throw error; }
@@ -1123,8 +1114,11 @@ function orderImportRow(row, shop) {
   };
 }
 function orderDuplicateDifferences(first, next) { const fields = [['支付金额','paymentAmount'],['退款金额','refundAmount'],['订单状态','orderStatus'],['物流状态','orderSubstatus'],['取消/退货类型','cancellationReturnType'],['商品编码','productCode'],['商品名称','productName'],['数量','quantity'],['下单时间','orderedAt']]; return fields.filter(([, key]) => String(first[key] ?? '') !== String(next[key] ?? '')).map(([label]) => label); }
-function orderHeaderPayload(item, shop, batchCode) {
-  return { shop_id: shop.id, shop_code: shop.shop_code, country_code: shop.country_code, order_number: item.orderNumber, order_status: item.orderStatus, order_substatus: item.orderSubstatus, refund_status: item.refundStatus, refund_amount: item.refundAmount, payment_amount: item.paymentAmount, currency_code: item.currencyCode, tracking_number: item.trackingNumber, logistics_carrier: item.logisticsCarrier, ordered_at: item.orderedAt, paid_at: item.paidAt, rts_at: item.rtsAt, shipped_at: item.shippedAt, delivered_at: item.deliveredAt, cancelled_at: item.cancelledAt, cancel_by: item.cancelBy, cancel_reason: item.cancelReason, normal_or_pre_order: item.normalOrPreOrder, fulfillment_type: item.fulfillmentType, warehouse_name: item.warehouseName, delivery_option: item.deliveryOption, buyer_message: item.buyerMessage, buyer_username: item.buyerUsername, recipient: item.recipient, recipient_phone: item.recipientPhone, destination_country: item.destinationCountry, province: item.province, district: item.district, commune: item.commune, detail_address: item.detailAddress, additional_address_information: item.additionalAddressInformation, payment_method: item.paymentMethod, package_id: item.packageId, seller_note: item.sellerNote, checked_status: item.checkedStatus, checked_marked_by: item.checkedMarkedBy, order_channel: item.orderChannel, creator_handle: item.creatorHandle, synced_at: new Date().toISOString(), source_identifier: batchCode, raw_data: item.rawData };
+function localOrderImportReference(batchCode, fileName) {
+  return { local_archive_requested: true, import_batch_code: batchCode, source_file_name: fileName || null };
+}
+function orderHeaderPayload(item, shop, batchCode, fileName = null) {
+  return { shop_id: shop.id, shop_code: shop.shop_code, country_code: shop.country_code, order_number: item.orderNumber, order_status: item.orderStatus, order_substatus: item.orderSubstatus, refund_status: item.refundStatus, refund_amount: item.refundAmount, payment_amount: item.paymentAmount, currency_code: item.currencyCode, tracking_number: item.trackingNumber, logistics_carrier: item.logisticsCarrier, ordered_at: item.orderedAt, paid_at: item.paidAt, rts_at: item.rtsAt, shipped_at: item.shippedAt, delivered_at: item.deliveredAt, cancelled_at: item.cancelledAt, cancel_by: item.cancelBy, cancel_reason: item.cancelReason, normal_or_pre_order: item.normalOrPreOrder, fulfillment_type: item.fulfillmentType, warehouse_name: item.warehouseName, delivery_option: item.deliveryOption, buyer_message: item.buyerMessage, buyer_username: item.buyerUsername, recipient: item.recipient, recipient_phone: item.recipientPhone, destination_country: item.destinationCountry, province: item.province, district: item.district, commune: item.commune, detail_address: item.detailAddress, additional_address_information: item.additionalAddressInformation, payment_method: item.paymentMethod, package_id: item.packageId, seller_note: item.sellerNote, checked_status: item.checkedStatus, checked_marked_by: item.checkedMarkedBy, order_channel: item.orderChannel, creator_handle: item.creatorHandle, synced_at: new Date().toISOString(), source_identifier: batchCode, raw_data: localOrderImportReference(batchCode, fileName) };
 }
 async function correctOrderImportDates(request, response) {
   try {
@@ -1153,8 +1147,8 @@ async function correctOrderImportDates(request, response) {
     sendJson(response, 200, { ...preview, message: changes.length ? `已修正 ${changes.length} 个订单的 ${preview.changedFields} 个日期字段。` : '该批次日期已正确，无需修改。' });
   } catch (error) { adminError(response, error); }
 }
-function orderItemPayload(item, orderId) {
-  return { order_id: orderId, product_code: item.productCode, sku_id: item.skuId, seller_sku: item.sellerSku, product_name: item.productName, variation: item.variation, quantity: item.quantity, sku_quantity_of_return: item.skuQuantityOfReturn, allocated_payment: item.paymentAmount, currency_code: item.currencyCode, cancellation_return_type: item.cancellationReturnType, sku_unit_original_price: item.skuUnitOriginalPrice, sku_subtotal_before_discount: item.skuSubtotalBeforeDiscount, sku_platform_discount: item.skuPlatformDiscount, sku_seller_discount: item.skuSellerDiscount, sku_subtotal_after_discount: item.skuSubtotalAfterDiscount, shipping_fee_after_discount: item.shippingFeeAfterDiscount, original_shipping_fee: item.originalShippingFee, shipping_fee_seller_discount: item.shippingFeeSellerDiscount, shipping_fee_platform_discount: item.shippingFeePlatformDiscount, payment_platform_discount: item.paymentPlatformDiscount, taxes: item.taxes, weight_kg: item.weightKg, product_category: item.productCategory, source_updated_at: item.sourceUpdatedAt, raw_data: item.rawData };
+function orderItemPayload(item, orderId, batchCode = null, fileName = null) {
+  return { order_id: orderId, product_code: item.productCode, sku_id: item.skuId, seller_sku: item.sellerSku, product_name: item.productName, variation: item.variation, quantity: item.quantity, sku_quantity_of_return: item.skuQuantityOfReturn, allocated_payment: item.paymentAmount, currency_code: item.currencyCode, cancellation_return_type: item.cancellationReturnType, sku_unit_original_price: item.skuUnitOriginalPrice, sku_subtotal_before_discount: item.skuSubtotalBeforeDiscount, sku_platform_discount: item.skuPlatformDiscount, sku_seller_discount: item.skuSellerDiscount, sku_subtotal_after_discount: item.skuSubtotalAfterDiscount, shipping_fee_after_discount: item.shippingFeeAfterDiscount, original_shipping_fee: item.originalShippingFee, shipping_fee_seller_discount: item.shippingFeeSellerDiscount, shipping_fee_platform_discount: item.shippingFeePlatformDiscount, payment_platform_discount: item.paymentPlatformDiscount, taxes: item.taxes, weight_kg: item.weightKg, product_category: item.productCategory, source_updated_at: item.sourceUpdatedAt, raw_data: localOrderImportReference(batchCode, fileName) };
 }
 function importedFieldMatches(current, next, kind) {
   if (kind === 'number') return Number(current ?? 0) === Number(next ?? 0);
@@ -1252,19 +1246,31 @@ async function importOrderDetailV3(request, response) {
     const batchCode = `${prefix}-${String((todayBatches || []).length + 1).padStart(3, '0')}`;
     const preview = { valid: true, mode, batchCode, shop: { id: shop.id, code: shop.shop_code, name: shop.shop_name, countryCode: shop.country_code, currencyCode: shop.currency_code }, totalRows: rows.length, insertCount, updateCount, skipCount: skipCount + duplicateSkipped, duplicateSkipped, failureCount: 0, changeDetails: changeDetails.slice(0, 50) };
     if (mode === 'preview') return sendJson(response, 200, preview);
-    const { data: batch, error: batchError } = await adminClient.from('order_import_batches').insert({ batch_code: batchCode, import_type: 'orders', file_name: fileName, shop_id: shop.id, country_code: shop.country_code, currency_code: shop.currency_code, total_rows: rows.length, success_rows: 0, updated_rows: 0, skipped_rows: skipCount, failed_rows: 0, failure_summary: [], validation_status: 'processing', imported_by: actor.id }).select().single();
+    const { data: batch, error: batchError } = await adminClient.from('order_import_batches').insert({ batch_code: batchCode, import_type: 'orders', file_name: fileName, shop_id: shop.id, country_code: shop.country_code, currency_code: shop.currency_code, total_rows: rows.length, success_rows: 0, updated_rows: 0, skipped_rows: skipCount, failed_rows: 0, failure_summary: [], validation_status: 'processing', rollback_expires_at: rollbackExpiry(), imported_by: actor.id }).select().single();
     if (batchError) throw new Error('创建导入批次失败，请重新校验后再导入');
     try {
-      const headers = [...headerByNumber.values()].map(item => orderHeaderPayload(item, shop, batchCode));
+      const headers = [...headerByNumber.values()].map(item => orderHeaderPayload(item, shop, batchCode, fileName));
+      const headerPayloadByNumber = new Map(headers.map(item => [item.order_number, item]));
       for (let offset = 0; offset < headers.length; offset += 200) { const { error } = await adminClient.from('orders').upsert(headers.slice(offset, offset + 200), { onConflict: 'shop_id,order_number' }); if (error) throw new Error(`保存订单失败：${error.message}`); }
       const writtenOrders = await collectBillQueryChunks([...headerByNumber.keys()], chunk => adminClient.from('orders').select('id, order_number').eq('shop_id', shop.id).in('order_number', chunk), '读取写入后的订单失败');
       const writtenByNumber = new Map((writtenOrders || []).map(item => [item.order_number, item.id]));
-      if (toWrite.length) { const itemRows = toWrite.map(item => orderItemPayload(item, writtenByNumber.get(item.orderNumber))); if (itemRows.some(item => !item.order_id)) throw new Error('订单行关联失败'); for (let offset = 0; offset < itemRows.length; offset += 200) { const { error } = await adminClient.from('order_items').upsert(itemRows.slice(offset, offset + 200), { onConflict: 'order_id,sku_id' }); if (error) throw new Error(`保存 SKU 明细失败：${error.message}`); } }
+      if (toWrite.length) { const itemRows = toWrite.map(item => orderItemPayload(item, writtenByNumber.get(item.orderNumber), batchCode, fileName)); if (itemRows.some(item => !item.order_id)) throw new Error('订单行关联失败'); for (let offset = 0; offset < itemRows.length; offset += 200) { const { error } = await adminClient.from('order_items').upsert(itemRows.slice(offset, offset + 200), { onConflict: 'order_id,sku_id' }); if (error) throw new Error(`保存 SKU 明细失败：${error.message}`); } }
+      const writtenOrderIds = [...writtenByNumber.values()];
+      const writtenItems = writtenOrderIds.length ? await collectBillQueryChunks(writtenOrderIds, chunk => adminClient.from('order_items').select('*').in('order_id', chunk), '读取写入后的订单明细失败') : [];
+      const writtenItemByIdentity = new Map((writtenItems || []).map(item => [`${numberByOrderId.get(item.order_id) || [...writtenByNumber.entries()].find(([, id]) => id === item.order_id)?.[0]}::${item.sku_id}`, item]));
+      const compactSnapshot = record => { if (!record) return null; const { raw_data, ...data } = record; return data; };
+      const rollbackChanges = toWrite.map(item => {
+        const orderId = writtenByNumber.get(item.orderNumber), existingOrder = orderByNumber.get(item.orderNumber), existingItem = itemByIdentity.get(`${item.orderNumber}::${item.skuId}`), writtenItem = writtenItemByIdentity.get(`${item.orderNumber}::${item.skuId}`), header = headerPayloadByNumber.get(item.orderNumber);
+        if (!orderId || !writtenItem || !header) return null;
+        return { batch_id: batch.id, order_id: orderId, order_item_id: writtenItem.id, operation: existingItem ? 'update' : 'insert', before_order: compactSnapshot(existingOrder), after_order: compactSnapshot({ ...header, id: orderId }), before_item: compactSnapshot(existingItem), after_item: compactSnapshot(writtenItem) };
+      }).filter(Boolean);
+      for (let offset = 0; offset < rollbackChanges.length; offset += 25) { const { error } = await adminClient.from('order_import_changes').insert(rollbackChanges.slice(offset, offset + 25)); if (error) throw new Error(`保存订单回滚快照失败：${error.message || '数据库写入失败'}`); }
       const { error: completeError } = await adminClient.from('order_import_batches').update({ success_rows: insertCount + updateCount, updated_rows: updateCount, skipped_rows: skipCount, validation_status: 'completed' }).eq('id', batch.id);
       if (completeError) throw new Error('更新导入批次状态失败');
-      await writeAudit(actor.id, 'order_import', batch.id, 'commit_order_import', null, { ...preview, batchCode });
+      const purgedRollbackSnapshots = await purgeExpiredImportRollbackSnapshots();
+      await writeAudit(actor.id, 'order_import', batch.id, 'commit_order_import', null, { ...preview, batchCode, rollbackExpiresAt: batch.rollback_expires_at, purgedRollbackSnapshots });
       dashboardOverviewCache.clear();
-      sendJson(response, 200, { ...preview, batch: { ...batch, validation_status: 'completed' }, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条。` });
+      sendJson(response, 200, { ...preview, batch: { ...batch, validation_status: 'completed' }, purgedRollbackSnapshots, message: `导入完成：新增 ${insertCount} 条，更新 ${updateCount} 条，跳过 ${skipCount} 条。` });
     } catch (error) {
       await adminClient.from('order_import_batches').update({ validation_status: 'partial', failure_summary: [{ reason: error.message || '写入中断' }] }).eq('id', batch.id);
       throw error;

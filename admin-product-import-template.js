@@ -33,7 +33,7 @@
       const preview = await request('/api/admin/products/import', payload('preview'));
       if (!preview.valid) return note.textContent = preview.failures.slice(0, 5).map(item => `第${item.row}行：${item.reason}`).join('；');
       note.innerHTML = `校验完成：共 ${preview.totalRows} 条，新增 ${preview.insertCount}，更新 ${preview.updateCount}。<button id="productImportCommit" type="button">确认导入</button>`;
-      note.querySelector('#productImportCommit').onclick = async () => { try { note.textContent = '正在写入商品数据…'; const done = await request('/api/admin/products/import', payload('commit')); dialog.close(); document.querySelector('#adminProductSearch')?.click(); window.alert(done.message); } catch (error) { note.textContent = error.message; } };
+      note.querySelector('#productImportCommit').onclick = async () => { try { note.textContent = '正在写入商品数据…'; const done = await request('/api/admin/products/import', payload('commit')); const saved = await window.localImportArchive?.save(file, done.batchCode || '商品资料', '商品资料'); const archiveMessage = saved?.location === 'folder' ? `原始文件已保存到本地归档文件夹“${saved.folder}”。` : '原始文件已开始下载到本机。'; dialog.close(); document.querySelector('#adminProductSearch')?.click(); window.alert(`${done.message}\n${archiveMessage}`); } catch (error) { note.textContent = error.message; } };
     } catch (error) { note.textContent = error.message; }
   }
 
@@ -45,10 +45,11 @@
     form.dataset.templateReady = 'true';
     const actions = document.createElement('div');
     actions.className = 'product-import-actions';
-    actions.innerHTML = '<button type="button" class="product-import-template">下载导入模板</button>';
+    actions.innerHTML = '<button type="button" class="product-import-template">下载导入模板</button><button type="button" class="product-import-archive-folder">选择本地归档文件夹</button><small class="product-import-archive-note">请先选择 G:\\源文件；成功导入后原文件会保存到该文件夹。</small>';
     previewButton.before(actions);
     actions.append(previewButton);
     actions.querySelector('.product-import-template').addEventListener('click', downloadTemplate);
+    actions.querySelector('.product-import-archive-folder').addEventListener('click', async () => { const note = actions.querySelector('.product-import-archive-note'); try { const folder = await window.localImportArchive.chooseDirectory(); note.textContent = `已选择本地归档文件夹：${folder}`; } catch (error) { note.textContent = error.message || '未选择本地归档文件夹'; } });
     const options = [...document.querySelector('#productWarehouse')?.options || []].filter(option => option.value && !option.textContent.includes('已停用')).map(option => `<option value="${option.value}">${option.textContent}</option>`).join('');
     const upload = form.querySelector('.product-import-upload');
     upload?.insertAdjacentHTML('beforebegin', `<label>仓库<select id="productImportWarehouse" required><option value="">请选择导入仓库</option>${options}</select><small>导入文件无需填写 warehouse_name，所有商品将归属此仓库。</small></label>`);

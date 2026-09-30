@@ -3,6 +3,10 @@
   if (!root) return;
 
   let promotions = [], shops = [], currentPage = 1, selectedCurrency = 'USD', selectedRateType = 'settlement';
+  async function archiveOriginalImport(file, batchCode) {
+    const saved = await window.localImportArchive?.save(file, batchCode, '推广费');
+    return saved?.location === 'folder' ? `原始文件已保存到本地归档文件夹“${saved.folder}”。` : '原始文件已开始下载到本机。';
+  }
   const dialog = document.createElement('dialog');
   dialog.id = 'promotionDialog';
   dialog.className = 'shop-admin-dialog';
@@ -87,9 +91,10 @@
   }
 
   function importDialog() {
-    dialog.innerHTML = `<section class="promotion-dialog-content"><button class="dialog-close" type="button" aria-label="关闭">×</button><h2>导入店铺日推广费</h2><p>先选择对应店铺，再上传 CSV 或 Excel。系统会先校验，确认后才写入真实数据并生成导入批次。</p><form id="promotionImportForm"><label>对应店铺 / 站点<select name="shopId" required>${shopOptions()}</select></label><label>导入批次<input id="promotionBatchCode" value="校验后自动生成，例如 20260925-0001" readonly /></label><label class="promotion-note-field">上传 CSV / Excel<input name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /><small>表头必须为：按天、成本、SKU 订单数（当前店铺）、平均下单成本（当前店铺）、总收入（当前店铺）、投资回报率 (ROI)（当前店铺）、币种。SKU 订单数直接填写整数，例如 34。</small><button type="button" id="promotionImportTemplate" class="promotion-template-button">下载空模板</button></label><div class="promotion-form-actions"><button type="button" class="admin-secondary" data-close>取消</button><button type="submit">校验并预览</button></div></form><section id="promotionImportResult" class="promotion-import-result"></section></section>`;
+    dialog.innerHTML = `<section class="promotion-dialog-content"><button class="dialog-close" type="button" aria-label="关闭">×</button><h2>导入店铺日推广费</h2><p>先选择对应店铺，再上传 CSV 或 Excel。系统会先校验，确认后才写入真实数据并生成导入批次。</p><form id="promotionImportForm"><label>对应店铺 / 站点<select name="shopId" required>${shopOptions()}</select></label><label>导入批次<input id="promotionBatchCode" value="校验后自动生成，例如 20260925-0001" readonly /></label><label class="promotion-note-field">上传 CSV / Excel<input name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required /><small>表头必须为：按天、成本、SKU 订单数（当前店铺）、平均下单成本（当前店铺）、总收入（当前店铺）、投资回报率 (ROI)（当前店铺）、币种。SKU 订单数直接填写整数，例如 34。</small><button type="button" id="promotionImportTemplate" class="promotion-template-button">下载空模板</button></label><button type="button" id="promotionArchiveFolder" class="admin-secondary">选择本地归档文件夹</button><small id="promotionArchiveFolderNote">请先选择 G:\源文件；成功导入后原文件会保存到该文件夹。</small><div class="promotion-form-actions"><button type="button" class="admin-secondary" data-close>取消</button><button type="submit">校验并预览</button></div></form><section id="promotionImportResult" class="promotion-import-result"></section></section>`;
     if (!dialog.open) dialog.showModal();
     dialog.querySelectorAll('[data-close], .dialog-close').forEach(button => button.onclick = closeDialog);
+    dialog.querySelector('#promotionArchiveFolder').onclick = async () => { const note = dialog.querySelector('#promotionArchiveFolderNote'); try { const folder = await window.localImportArchive.chooseDirectory(); note.textContent = `已选择本地归档文件夹：${folder}`; } catch (error) { note.textContent = error.message || '未选择本地归档文件夹'; } };
     dialog.querySelector('#promotionImportTemplate').onclick = () => {
       const headers = ['按天', '成本', 'SKU 订单数（当前店铺）', '平均下单成本（当前店铺）', '总收入（当前店铺）', '投资回报率 (ROI)（当前店铺）', '币种'];
       const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([`\uFEFF${headers.join(',')}\r\n`], { type: 'text/csv;charset=utf-8' })); link.download = '店铺日推广费导入模板.csv'; link.click(); URL.revokeObjectURL(link.href);
@@ -112,7 +117,7 @@
         note.innerHTML = `<strong>校验完成 · 批次 ${escapeHtml(preview.batchCode)}</strong><p>共 ${preview.totalRows} 条；新增 ${preview.insertCount} 条，更新 ${preview.updateCount} 条。</p><button type="button" id="promotionImportCommit">确认导入</button>`;
         dialog.querySelector('#promotionImportCommit').onclick = async () => {
           const commit = dialog.querySelector('#promotionImportCommit'); commit.disabled = true; note.textContent = '正在写入店铺日推广费…';
-          try { const done = await upload('commit'); closeDialog(); await load(); draw(); window.alert(done.message); }
+          try { const done = await upload('commit'); const archiveMessage = await archiveOriginalImport(form.elements.file.files[0], done.batch?.batch_code || done.batchCode); closeDialog(); await load(); draw(); window.alert(`${done.message}\n${archiveMessage}`); }
           catch (error) { note.textContent = error.message; commit.disabled = false; }
         };
       } catch (error) { note.textContent = error.message; }
