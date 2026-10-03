@@ -37,8 +37,12 @@
   const stateBadges = row => {
     const items = row.statusItems || [];
     if (!items.length) return '<span class="profit-tab-state ok">正常</span>';
-    return `<span class="profit-status-items">${items.map(item => item.code === '商品成本待补'
+    return `<span class="profit-status-items">${items.map(item => item.code === '结算未匹配'
+      ? `<button class="profit-tab-state warn profit-status-export" type="button" data-profit-status-export="settlement_unmatched" data-shop-id="${escapeHtml(row.shopId || '')}" title="导出当前筛选范围内结算未匹配订单">${escapeHtml(item.label || item.code)}</button>`
+      : item.code === '商品成本待补'
       ? `<button class="profit-tab-state warn profit-status-export" type="button" data-profit-status-export="product_cost_missing" data-shop-id="${escapeHtml(row.shopId || '')}" title="导出当前筛选范围内的商品成本待补订单">${escapeHtml(item.label || item.code)}</button>`
+      : item.code === '商品仓库成本未匹配'
+        ? `<button class="profit-tab-state warn profit-status-export" type="button" data-profit-status-export="product_warehouse_cost_missing" data-shop-id="${escapeHtml(row.shopId || '')}" title="导出当前筛选范围内商品仓库成本未匹配订单">${escapeHtml(item.label || item.code)}</button>`
       : `<span class="profit-tab-state ${item.code === '已取消未结算' ? 'neutral' : 'warn'}">${escapeHtml(item.label || item.code)}</span>`).join('')}</span>`;
   };
   const warehouseCostExplanation = (row, allocated = false) => {
@@ -168,6 +172,36 @@
     URL.revokeObjectURL(link.href);
   }
 
+  async function exportProductWarehouseCostMissing(shopId = '') {
+    const params = new URLSearchParams({ ...reportRange, currency: reportCurrency, rateType: $('#summaryRateTypeFilter').value || 'settlement', export: 'product_warehouse_cost_missing', ...(shopId ? { shopId } : {}), ...(!shopId && $('#summaryShopFilter').value ? { shopId: $('#summaryShopFilter').value } : {}), ...($('#summaryCountryFilter').value ? { site: $('#summaryCountryFilter').value } : {}) });
+    const response = await fetch(`/api/business/dashboard-overview?${params}`, { headers: headers() });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || '导出商品仓库成本未匹配订单失败');
+    }
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `商品仓库成本未匹配_${reportRange.start}_至_${reportRange.end}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  async function exportSettlementUnmatched(shopId = '') {
+    const params = new URLSearchParams({ ...reportRange, currency: reportCurrency, rateType: $('#summaryRateTypeFilter').value || 'settlement', export: 'settlement_unmatched', ...(shopId ? { shopId } : {}), ...(!shopId && $('#summaryShopFilter').value ? { shopId: $('#summaryShopFilter').value } : {}), ...($('#summaryCountryFilter').value ? { site: $('#summaryCountryFilter').value } : {}) });
+    const response = await fetch(`/api/business/dashboard-overview?${params}`, { headers: headers() });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || '导出结算未匹配订单失败');
+    }
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `结算未匹配_${reportRange.start}_至_${reportRange.end}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   async function loadLiveData(force = false) {
     try {
       const range = selectedRange();
@@ -224,8 +258,17 @@
   $('#profitProductKeyword').addEventListener('input', renderRows);
   $('#profitProductState').addEventListener('change', renderRows);
   card.addEventListener('click', event => {
-    const exportButton = event.target.closest('[data-profit-status-export="product_cost_missing"]');
-    if (exportButton) { exportProductCostMissing(exportButton.dataset.shopId).catch(error => window.alert(error.message)); return; }
+    const exportButton = event.target.closest('[data-profit-status-export]');
+    if (exportButton) {
+      const exportType = exportButton.dataset.profitStatusExport;
+      const exportTask = exportType === 'settlement_unmatched'
+        ? exportSettlementUnmatched(exportButton.dataset.shopId)
+        : exportType === 'product_warehouse_cost_missing'
+          ? exportProductWarehouseCostMissing(exportButton.dataset.shopId)
+          : exportProductCostMissing(exportButton.dataset.shopId);
+      exportTask.catch(error => window.alert(error.message));
+      return;
+    }
     const button = event.target.closest('.detail-button'); if (button) showDetail(button.dataset.view, button.dataset.key);
   });
   $('#closeProfitDetail').addEventListener('click', () => $('#profitDetailDialog').close());

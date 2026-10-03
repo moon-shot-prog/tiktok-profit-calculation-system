@@ -1774,9 +1774,11 @@ async function listBusinessDashboardOverview(request, response) {
     const forceRefresh = requestUrl.searchParams.get('refresh') === 'true';
     const lightweightDashboard = requestUrl.searchParams.get('view') === 'dashboard';
     const exportProductCostMissing = requestUrl.searchParams.get('export') === 'product_cost_missing';
+    const exportProductWarehouseCostMissing = requestUrl.searchParams.get('export') === 'product_warehouse_cost_missing';
+    const exportSettlementUnmatched = requestUrl.searchParams.get('export') === 'settlement_unmatched';
     const cacheKey = `${identity.profile.id}:${String(requestUrl.searchParams.get('shopId') || '') || 'all'}:${requestedSite || 'all'}:${start}:${end}:${reportCurrency}:${rateType}:${lightweightDashboard ? 'dashboard' : 'detail'}`;
     const cached = dashboardOverviewCache.get(cacheKey);
-    if (!exportProductCostMissing && !forceRefresh && cached && Date.now() - cached.createdAt < DASHBOARD_OVERVIEW_CACHE_TTL) return sendJson(response, 200, cached.data);
+    if (!exportProductCostMissing && !exportProductWarehouseCostMissing && !exportSettlementUnmatched && !forceRefresh && cached && Date.now() - cached.createdAt < DASHBOARD_OVERVIEW_CACHE_TTL) return sendJson(response, 200, cached.data);
     const [{ data: permissions, error: permissionsError }, { data: rates, error: ratesError }] = await Promise.all([
       adminClient.from('user_shop_permissions').select('shop_id').eq('user_id', identity.profile.id),
       rateType === 'settlement'
@@ -2124,6 +2126,8 @@ async function listBusinessDashboardOverview(request, response) {
     };
     const storeProfitMap = new Map();
     const productCostMissingExports = [];
+    const productWarehouseCostMissingExports = [];
+    const settlementUnmatchedExports = [];
     profitOrders.forEach((order, key) => {
       const chosenBills = selectedBillsByOrder.get(key) || [];
       const totals = billTotals(chosenBills, order);
@@ -2137,7 +2141,24 @@ async function listBusinessDashboardOverview(request, response) {
       // 店铺推广费以推广管理按“店铺 + 日期”归集的费用为唯一口径，避免重复扣减账单明细费用。
       if (!chosenBills.length) {
         if (/取消|cancel/i.test(String(order.orderStatus || ''))) store.cancelledUnsettledOrderCount = Number(store.cancelledUnsettledOrderCount || 0) + 1;
-        else store.missingSettlement += 1;
+        else {
+          store.missingSettlement += 1;
+          settlementUnmatchedExports.push({
+            shop: order.shop,
+            site: order.site,
+            orderedAt: order.date,
+            orderNumber: order.number,
+            trackingNumber: order.trackingNumber,
+            orderStatus: order.orderStatus,
+            skuIds: [...new Set(order.items.map(item => String(item.sku_id || '').trim()).filter(Boolean))].join(' | '),
+            productCodes: [...new Set(order.items.map(item => String(item.seller_sku || item.product_code || '').trim()).filter(Boolean))].join(' | '),
+            productNames: [...new Set(order.items.map(item => String(item.product_name || '').trim()).filter(Boolean))].join(' | '),
+            warehouseName: order.warehouseName,
+            deliveryOption: order.deliveryOption,
+            shippingProviderName: order.shippingProviderName,
+            reason: '未找到对应订单 ID 的有效已结算或未结算账单'
+          });
+        }
       }
       if (order.missingRate || totals.missingRate) store.missingRate += 1;
       storeProfitMap.set(order.shopId, store);
@@ -2147,6 +2168,24 @@ async function listBusinessDashboardOverview(request, response) {
         const lineKey = String(item.id || `${key}:${itemIndex}`);
         const productCostResult = productCostFor(order, item);
         const productCode = String(productCostResult.productCode || item.seller_sku || item.product_code || '').trim();
+        if (productCostResult.status === 'warehouse_unmatched') {
+          productWarehouseCostMissingExports.push({
+            shop: order.shop,
+            site: order.site,
+            orderedAt: order.date,
+            orderNumber: order.number,
+            trackingNumber: order.trackingNumber,
+            orderStatus: order.orderStatus,
+            skuId: item.sku_id || '',
+            productCode,
+            productName: item.product_name || '',
+            quantity: item.quantity || '',
+            warehouseName: order.warehouseName,
+            deliveryOption: order.deliveryOption,
+            shippingProviderName: order.shippingProviderName,
+            reason: '店铺已授权仓库中，未找到同时匹配 Warehouse Name、Delivery Option、Shipping Provider Name 的仓库配置'
+          });
+        }
         if (productCostResult.status === 'product_missing') {
           const matchedWarehouse = fulfillmentWarehouses.find(warehouse => warehouse.id === order.matchedWarehouseId);
           productCostMissingExports.push({
@@ -2259,6 +2298,22 @@ async function listBusinessDashboardOverview(request, response) {
       const rows = productCostMissingExports.map(item => [item.shop, item.site, item.orderedAt, item.orderNumber, item.trackingNumber, item.orderStatus, item.skuId, item.productCode, item.productName, item.quantity, item.warehouseName, item.deliveryOption, item.shippingProviderName, item.matchedWarehouse, item.reason]);
       const csv = [header, ...rows].map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
       response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="product-cost-missing_${start}_to_${end}.csv"`, 'Cache-Control': 'no-store, max-age=0' });
+      response.end(`\uFEFF${csv}`);
+      return;
+    }
+    if (exportProductWarehouseCostMissing) {
+      const header = ['店铺', '国家站点', '下单日期', '订单 ID', 'Tracking ID', '订单状态', 'SKU ID', '商品编码', '订单商品名称', '数量', '订单 Warehouse Name', '订单 Delivery Option', '订单 Shipping Provider Name', '待补原因'];
+      const rows = productWarehouseCostMissingExports.map(item => [item.shop, item.site, item.orderedAt, item.orderNumber, item.trackingNumber, item.orderStatus, item.skuId, item.productCode, item.productName, item.quantity, item.warehouseName, item.deliveryOption, item.shippingProviderName, item.reason]);
+      const csv = [header, ...rows].map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="product-warehouse-cost-missing_${start}_to_${end}.csv"`, 'Cache-Control': 'no-store, max-age=0' });
+      response.end(`\uFEFF${csv}`);
+      return;
+    }
+    if (exportSettlementUnmatched) {
+      const header = ['店铺', '国家站点', '下单日期', '订单 ID', 'Tracking ID', '订单状态', 'SKU ID', '商品编码', '订单商品名称', '订单 Warehouse Name', '订单 Delivery Option', '订单 Shipping Provider Name', '待补原因'];
+      const rows = settlementUnmatchedExports.map(item => [item.shop, item.site, item.orderedAt, item.orderNumber, item.trackingNumber, item.orderStatus, item.skuIds, item.productCodes, item.productNames, item.warehouseName, item.deliveryOption, item.shippingProviderName, item.reason]);
+      const csv = [header, ...rows].map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="settlement-unmatched_${start}_to_${end}.csv"`, 'Cache-Control': 'no-store, max-age=0' });
       response.end(`\uFEFF${csv}`);
       return;
     }
