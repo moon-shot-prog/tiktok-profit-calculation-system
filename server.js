@@ -634,11 +634,16 @@ async function listWarehouseManagementData(request, response) {
       adminClient.from('warehouse_cost_versions').select('id, warehouse_id, amount, currency_code, billing_unit, effective_date, note, created_at').order('effective_date', { ascending: false }).order('created_at', { ascending: false }),
       adminClient.from('country_sites').select('code, name, default_currency').order('name'),
       adminClient.from('warehouse_country_sites').select('warehouse_id, country_code'),
-      adminClient.from('orders').select('warehouse_name, delivery_option, logistics_carrier, warehouses(name)').limit(2000)
+      // 原仓库名称只用于提供人工映射候选项。按最近同步时间读取，确保新导入订单
+      // 的仓库名称不会被历史数据占满前 2,000 条而遗漏。
+      adminClient.from('orders').select('warehouse_name, delivery_option, logistics_carrier, warehouses(name)').order('synced_at', { ascending: false }).order('id', { ascending: false }).limit(2000)
     ]);
     if (warehousesError || linksError || shopsError || costVersionsError || countrySitesError || warehouseCountrySitesError || orderWarehouseOptionsError) throw new Error('读取仓库管理数据失败');
-    const orderWarehouseMappings = [...new Map((orderWarehouseOptions || []).map(row => { const warehouseName = row.warehouse_name || row.warehouses?.name; return [warehouseName, { warehouseName, deliveryOptions: [], shippingProviders: [] }]; }).filter(([warehouseName]) => warehouseName)).values()];
-    const mappingByName = new Map(orderWarehouseMappings.map(row => [row.warehouseName, row])); (orderWarehouseOptions || []).forEach(row => { const warehouseName = row.warehouse_name || row.warehouses?.name; const mapping = mappingByName.get(warehouseName); if (!mapping) return; if (row.delivery_option && !mapping.deliveryOptions.includes(row.delivery_option)) mapping.deliveryOptions.push(row.delivery_option); if (row.logistics_carrier && !mapping.shippingProviders.includes(row.logistics_carrier)) mapping.shippingProviders.push(row.logistics_carrier); });
+    const mappingByName = new Map((orderWarehouseOptions || []).map(row => { const warehouseName = row.warehouse_name || row.warehouses?.name; return [warehouseName, { warehouseName, deliveryOptions: [], shippingProviders: [] }]; }).filter(([warehouseName]) => warehouseName));
+    // 已保存的历史映射同样保留在候选项中，避免编辑时旧名称被无意移除。
+    (warehouses || []).flatMap(warehouse => String(warehouse.original_warehouse_name || '').split(/[、,，]/).map(name => name.trim()).filter(Boolean)).forEach(warehouseName => { if (!mappingByName.has(warehouseName)) mappingByName.set(warehouseName, { warehouseName, deliveryOptions: [], shippingProviders: [] }); });
+    (orderWarehouseOptions || []).forEach(row => { const warehouseName = row.warehouse_name || row.warehouses?.name; const mapping = mappingByName.get(warehouseName); if (!mapping) return; if (row.delivery_option && !mapping.deliveryOptions.includes(row.delivery_option)) mapping.deliveryOptions.push(row.delivery_option); if (row.logistics_carrier && !mapping.shippingProviders.includes(row.logistics_carrier)) mapping.shippingProviders.push(row.logistics_carrier); });
+    const orderWarehouseMappings = [...mappingByName.values()].sort((left, right) => left.warehouseName.localeCompare(right.warehouseName, 'zh-CN'));
     sendJson(response, 200, { warehouses, links, shops, costVersions, countrySites, warehouseCountrySites, orderWarehouseMappings });
   } catch (error) { adminError(response, error); }
 }
@@ -1971,12 +1976,21 @@ async function listBusinessDashboardOverview(request, response) {
       entry.items.push(item); profitOrders.set(key, entry);
     }
     const mappingValues = value => String(value || '').split(/[、,，]/).map(item => item.trim()).filter(Boolean);
-    const matchingWarehouses = order => (fulfillmentWarehouses || []).filter(warehouse =>
-      warehouseShopIds.get(warehouse.id)?.has(order.shopId) &&
-      mappingValues(warehouse.original_warehouse_name).includes(String(order.warehouseName || '').trim()) &&
-      mappingValues(warehouse.delivery_option).includes(String(order.deliveryOption || '').trim()) &&
-      mappingValues(warehouse.shipping_provider_name).includes(String(order.shippingProviderName || '').trim())
-    );
+    const matchingWarehouses = order => {
+      const orderCarrier = String(order.shippingProviderName || '').trim();
+      return (fulfillmentWarehouses || []).filter(warehouse => {
+        const configuredCarriers = mappingValues(warehouse.shipping_provider_name);
+        // 订单和仓库配置的承运商都为空时允许匹配；订单有承运商时必须精确匹配，
+        // 避免把不同承运商的订单错误计入同一仓库费用。
+        const carrierMatches = orderCarrier
+          ? configuredCarriers.includes(orderCarrier)
+          : configuredCarriers.length === 0;
+        return warehouseShopIds.get(warehouse.id)?.has(order.shopId) &&
+          mappingValues(warehouse.original_warehouse_name).includes(String(order.warehouseName || '').trim()) &&
+          mappingValues(warehouse.delivery_option).includes(String(order.deliveryOption || '').trim()) &&
+          carrierMatches;
+      });
+    };
     const matchingCostVersion = (warehouseId, orderDate) => (fulfillmentCostVersions || []).find(version => version.warehouse_id === warehouseId && version.effective_date <= orderDate);
     const productByWarehouseAndCode = new Map((fulfillmentProducts || []).map(product => [`${product.warehouse_id}::${String(product.product_code || '').trim()}`, product]));
     const matchingProductCostVersion = (warehouseId, productCode, orderDate) => (productCostVersions || []).find(version => version.warehouse_id === warehouseId && String(version.product_code || '').trim() === productCode && version.effective_date <= orderDate);
