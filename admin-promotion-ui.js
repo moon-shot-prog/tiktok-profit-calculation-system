@@ -108,7 +108,8 @@
     };
     dialog.querySelector('#promotionImportForm').onsubmit = async event => {
       event.preventDefault();
-      const note = dialog.querySelector('#promotionImportResult'), submit = event.currentTarget.querySelector('[type="submit"]');
+      const form = event.currentTarget;
+      const note = dialog.querySelector('#promotionImportResult'), submit = form.querySelector('[type="submit"]');
       submit.disabled = true; note.textContent = '正在校验文件…';
       try {
         const preview = await upload('preview');
@@ -150,5 +151,20 @@
     load().then(ok => { if (ok) { fillShops(); draw(); } });
   }
 
-  document.addEventListener('admin:navigate', event => { if (event.detail.page === 'promotions') render(); });
+  // 推广管理独立接管自己的导航点击。后台其他模块会在重绘时绑定点击事件，
+  // 不能再依赖它们的统一分发，否则事件被拦截时侧栏会看似可点但页面不切换。
+  let directPromotionNavigation = false;
+  document.addEventListener('click', event => {
+    const button = event.target instanceof Element ? event.target.closest('[data-admin-page="promotions"]') : null;
+    if (!button) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    document.querySelectorAll('[data-admin-page]').forEach(item => item.classList.toggle('active', item === button));
+    // 告知其他独立模块清理自己的页面状态，再由本模块只渲染一次。
+    directPromotionNavigation = true;
+    document.dispatchEvent(new CustomEvent('admin:navigate', { detail: { page: 'promotions' } }));
+    directPromotionNavigation = false;
+    render();
+  }, true);
+  document.addEventListener('admin:navigate', event => { if (event.detail.page === 'promotions' && !directPromotionNavigation) render(); });
 })();

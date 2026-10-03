@@ -694,7 +694,7 @@ function billDisplayAmount(record) {
   return Number.isFinite(amount) ? amount : 0;
 }
 function formatTikTokBillRecord(record) {
-  return { id: record.id, sourceType: record.source_type, replacementStatus: record.replacement_status, number: record.settlement_document_id || '—', date: record.settlement_date || record.transaction_created_at?.slice(0, 10) || record.created_at?.slice(0, 10) || '—', estimatedDate: record.estimated_settlement_at?.slice(0, 10) || record.raw_data?.['预计结算时间'] || record.raw_data?.['Estimated Settlement Time'] || '—', currency: record.currency_code, type: record.transaction_type, order: record.transaction_id || record.related_order_id || '—', relatedOrder: record.related_order_id || '—', sku: record.sku_id || '—', name: record.product_name || '—', qty: record.quantity || 0, amount: `${record.currency_code} ${billDisplayAmount(record).toFixed(2)}`, income: `${record.currency_code} ${Number(record.total_income || 0).toFixed(2)}`, fees: `${record.currency_code} ${Number(record.total_fees || 0).toFixed(2)}`, shop: record.shops?.shop_name || '—', batch: record.import_batch_id || '—', importStatus: record.source_type === 'settled' ? '已结算' : '未结算预估', syncedAt: record.updated_at, rawData: record.raw_data || {}, feeBreakdown: record.fee_breakdown || {}, unsettledReason: record.unsettled_reason || '—' };
+  return { id: record.id, sourceType: record.source_type, replacementStatus: record.replacement_status, number: record.settlement_document_id || '—', date: record.settlement_date || record.transaction_created_at?.slice(0, 10) || record.created_at?.slice(0, 10) || '—', estimatedDate: record.estimated_settlement_at?.slice(0, 10) || record.raw_data?.['预计结算时间'] || record.raw_data?.['Estimated Settlement Time'] || '—', currency: record.currency_code, type: record.transaction_type, order: record.transaction_id || record.related_order_id || '—', relatedOrder: record.related_order_id || '—', sku: record.sku_id || '—', name: record.product_name || '—', qty: record.quantity || 0, amount: `${record.currency_code} ${billDisplayAmount(record).toFixed(2)}`, income: `${record.currency_code} ${Number(record.total_income || 0).toFixed(2)}`, fees: `${record.currency_code} ${Number(record.total_fees || 0).toFixed(2)}`, shop: record.shops?.shop_code || record.shops?.shop_name || '—', batch: record.import_batch_id || '—', importStatus: record.source_type === 'settled' ? '已结算' : '未结算预估', syncedAt: record.updated_at, rawData: record.raw_data || {}, feeBreakdown: record.fee_breakdown || {}, unsettledReason: record.unsettled_reason || '—' };
 }
 async function productCodesBySettlementSku(records, scopedShopIds) {
   const skuIds = [...new Set((records || []).map(record => String(record.sku_id || '').trim()).filter(Boolean))];
@@ -730,22 +730,14 @@ async function productNamesByCode(codeBySku) {
   }
   return nameByCode;
 }
-async function settlementShopFilterOptions(tab, includeSuperseded, scopedShopIds = null) {
-  let shopsQuery = adminClient.from('shops').select('id, shop_name').order('shop_name', { ascending: true });
+async function authorizedShopFilterOptions(scopedShopIds = null) {
+  // 店铺下拉不再由当前页数据推断。这样没有订单/账单的已授权店铺也能被选中查询，
+  // 且业务端始终只会拿到本人被授权、并且仍启用的店铺。
+  let shopsQuery = adminClient.from('shops').select('id, shop_code, shop_name').eq('is_active', true).order('shop_name', { ascending: true });
   if (scopedShopIds !== null) shopsQuery = shopsQuery.in('id', scopedShopIds.length ? scopedShopIds : ['00000000-0000-0000-0000-000000000000']);
-  const { data: visibleShops, error: shopsError } = await shopsQuery;
-  if (shopsError) throw new Error('读取结算单店铺筛选项失败');
-
-  const applicableShops = await Promise.all((visibleShops || []).map(async shop => {
-    let recordsQuery = adminClient.from('tiktok_bill_records').select('id', { count: 'exact', head: true }).eq('shop_id', shop.id);
-    if (tab === 'settled') recordsQuery = recordsQuery.eq('source_type', 'settled').eq('replacement_status', 'active');
-    else if (tab === 'review') recordsQuery = recordsQuery.eq('replacement_status', 'needs_review');
-    else recordsQuery = recordsQuery.eq('source_type', 'unsettled').in('replacement_status', includeSuperseded ? ['active', 'superseded'] : ['active']);
-    const { count, error } = await recordsQuery;
-    if (error) throw new Error('读取结算单店铺筛选项失败');
-    return count ? shop.shop_name : null;
-  }));
-  return applicableShops.filter(Boolean);
+  const { data: shops, error } = await shopsQuery;
+  if (error) throw new Error('读取店铺筛选项失败');
+  return shops || [];
 }
 async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = null) {
   const page = Math.max(1, Number(requestUrl.searchParams.get('page')) || 1);
@@ -756,14 +748,14 @@ async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = nu
   const isLight = requestUrl.searchParams.get('light') === 'true';
   const shop = requestUrl.searchParams.get('settlementShop') || '', currency = requestUrl.searchParams.get('settlementCurrency') || '', transactionType = requestUrl.searchParams.get('settlementType') || '', start = requestUrl.searchParams.get('settlementStart') || '', end = requestUrl.searchParams.get('settlementEnd') || '', orderId = requestUrl.searchParams.get('settlementOrder') || '', skuId = requestUrl.searchParams.get('settlementSku') || '';
   const listFields = isLight
-    ? 'id, source_type, settlement_document_id, settlement_date, transaction_created_at, currency_code, transaction_type, transaction_id, related_order_id, sku_id, product_name, quantity, settlement_amount, shops!inner(shop_name, country_code)'
-    : 'id, source_type, replacement_status, settlement_document_id, settlement_date, transaction_created_at, estimated_settlement_at, currency_code, transaction_type, transaction_id, related_order_id, sku_id, product_name, quantity, settlement_amount, total_income, total_fees, fee_breakdown, raw_data, import_batch_id, unsettled_reason, created_at, updated_at, shops!inner(shop_name, country_code)';
+    ? 'id, source_type, settlement_document_id, settlement_date, transaction_created_at, currency_code, transaction_type, transaction_id, related_order_id, sku_id, product_name, quantity, settlement_amount, shops!inner(shop_code, shop_name, country_code)'
+    : 'id, source_type, replacement_status, settlement_document_id, settlement_date, transaction_created_at, estimated_settlement_at, currency_code, transaction_type, transaction_id, related_order_id, sku_id, product_name, quantity, settlement_amount, total_income, total_fees, fee_breakdown, raw_data, import_batch_id, unsettled_reason, created_at, updated_at, shops!inner(shop_code, shop_name, country_code)';
   let query = adminClient.from('tiktok_bill_records').select(listFields, { count: 'exact' }).order('updated_at', { ascending: false });
   if (scopedShopIds !== null) query = query.in('shop_id', scopedShopIds.length ? scopedShopIds : ['00000000-0000-0000-0000-000000000000']);
   if (tab === 'settled') query = query.eq('source_type', 'settled').eq('replacement_status', 'active');
   else if (tab === 'review') query = query.eq('replacement_status', 'needs_review');
   else { query = query.eq('source_type', 'unsettled'); query = includeSuperseded ? query.in('replacement_status', ['active', 'superseded']) : query.eq('replacement_status', 'active'); }
-  if (shop) query = query.eq('shops.shop_name', shop);
+  if (shop) query = query.eq('shops.shop_code', shop);
   if (currency) query = query.eq('currency_code', currency);
   if (transactionType) query = query.eq('transaction_type', transactionType);
   if (orderId) query = query.ilike('transaction_id', `%${orderId}%`);
@@ -771,9 +763,9 @@ async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = nu
   const dateColumn = tab === 'settled' ? 'settlement_date' : tab === 'unsettled' ? 'transaction_created_at' : 'created_at';
   if (start) query = query.gte(dateColumn, start);
   if (end) query = query.lte(dateColumn, dateColumn === 'settlement_date' ? end : `${end}T23:59:59.999+00:00`);
-  const [pageResult, settlementShops] = await Promise.all([
+  const [pageResult, shops] = await Promise.all([
     query.range((page - 1) * pageSize, page * pageSize - 1),
-    settlementShopFilterOptions(tab, includeSuperseded, scopedShopIds)
+    authorizedShopFilterOptions(scopedShopIds)
   ]);
   const { data, error, count } = pageResult;
   if (error) throw new Error(`读取结算单数据失败：${error.message || '数据库查询失败'}`);
@@ -784,10 +776,10 @@ async function listPaginatedTikTokBills(requestUrl, response, scopedShopIds = nu
   if (isExport) { const csv = [['数据来源','利润状态','店铺简称','国家站点','订单创建日期','相关订单 ID','SKU ID','商品名称','数量','预计/结算金额','总收入','总费用','导入状态'], ...(data || []).map(item => [item.source_type === 'settled' ? '已结算账单' : '未结算账单', item.replacement_status, item.shops?.shop_name || '', item.shops?.country_code || '', item.transaction_created_at?.slice(0, 10) || item.settlement_date || '', item.related_order_id || '', item.sku_id || '', productNameFor(item), item.quantity || 0, billDisplayAmount(item), item.total_income || 0, item.total_fees || 0, item.source_type])].map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n'); response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="tiktok-bills.csv"' }); response.end(`\uFEFF${csv}`); return; }
   if (isLight) {
     const totalRows = count || 0;
-    return sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [], settlementShops }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: 1 } });
+    return sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [], shops }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: 1 } });
   }
   const totalRows = count || 0;
-  sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [], settlementShops }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) } });
+  sendJson(response, 200, { orders: [], settlements: (data || []).map(record => { const formatted = formatTikTokBillRecord(record); formatted.site = record.shops?.country_code || '—'; formatted.productCode = productCodeFor(record); formatted.name = productNameFor(record); return formatted; }), filterOptions: { orderStatuses: [], logisticsStatuses: [], shops }, settlementMeta: { page, pageSize, totalRows, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) }, orderMeta: { orderItemCount: 0, page: 1, pageSize: 20, totalPages: Math.max(1, Math.ceil(totalRows / pageSize)) } });
 }
 async function listPaginatedOrderSettlementManagementData(request, response, scopedShopIds = null) {
   try {
@@ -803,9 +795,11 @@ async function listPaginatedOrderSettlementManagementData(request, response, sco
     const isExport = requestUrl.searchParams.get('export') === 'csv';
     const pageSize = isExport ? 10000 : ([20, 50, 100].includes(requestedSize) ? requestedSize : 20);
     const shop = requestUrl.searchParams.get('shop') || '', warehouse = requestUrl.searchParams.get('warehouse') || '', status = requestUrl.searchParams.get('status') || '', logistics = requestUrl.searchParams.get('logistics') || '', start = requestUrl.searchParams.get('start') || '', end = requestUrl.searchParams.get('end') || '', orderId = requestUrl.searchParams.get('orderId') || '', code = requestUrl.searchParams.get('code') || '';
-    let orderQuery = adminClient.from('order_items').select('order_id, product_code, sku_id, product_name, quantity, allocated_payment, currency_code, sku_subtotal_after_discount, shipping_fee_after_discount, payment_platform_discount, raw_data, orders!inner(id, shop_id, order_number, order_status, order_substatus, refund_status, refund_amount, currency_code, tracking_number, logistics_carrier, delivery_option, warehouse_name, ordered_at, shipped_at, synced_at, source_identifier, raw_data, shops!inner(shop_name, country_code), warehouses(name, original_warehouse_name))', { count: 'exact' }).order('created_at', { ascending: false });
+    // 历史订单量较大时，关联筛选配合 exact 会为每次翻页执行一次全量精确计数，
+    // 旧库会因此超时。planned 计数保留分页所需总量，同时不阻塞订单数据读取。
+    let orderQuery = adminClient.from('order_items').select('order_id, product_code, sku_id, product_name, quantity, allocated_payment, currency_code, sku_subtotal_after_discount, shipping_fee_after_discount, payment_platform_discount, raw_data, orders!inner(id, shop_id, order_number, order_status, order_substatus, refund_status, refund_amount, currency_code, tracking_number, logistics_carrier, delivery_option, warehouse_name, ordered_at, shipped_at, synced_at, source_identifier, raw_data, shops!inner(shop_code, shop_name, country_code), warehouses(name, original_warehouse_name))', { count: 'planned' }).order('created_at', { ascending: false });
     if (scopedShopIds !== null) orderQuery = orderQuery.in('orders.shop_id', scopedShopIds.length ? scopedShopIds : ['00000000-0000-0000-0000-000000000000']);
-    if (shop) orderQuery = orderQuery.eq('orders.shops.shop_name', shop);
+    if (shop) orderQuery = orderQuery.eq('orders.shops.shop_code', shop);
     if (warehouse) orderQuery = orderQuery.in('orders.warehouse_name', warehouse.split('|').filter(Boolean));
     if (status) orderQuery = orderQuery.eq('orders.order_status', status);
     if (logistics) orderQuery = orderQuery.eq('orders.order_substatus', logistics);
@@ -822,12 +816,13 @@ async function listPaginatedOrderSettlementManagementData(request, response, sco
     // 额外读取 500 条完整账单（含原始字段），账单慢或失败会误伤订单列表。
     // 结算单管理已通过 view=settlements 使用自己的分页查询，故此处绝不读取账单。
     const settlementPromise = Promise.resolve({ data: [], error: null });
-    const [{ data: itemRows, error: itemsError, count: orderItemCount }, { data: settlements, error: settlementsError }, { data: orderFilterRows, error: orderFilterError }] = await Promise.all([
+    const [{ data: itemRows, error: itemsError, count: orderItemCount }, { data: settlements, error: settlementsError }, { data: orderFilterRows, error: orderFilterError }, shops] = await Promise.all([
       orderQuery.range((page - 1) * pageSize, page * pageSize - 1),
       // TikTok 已结算 / 未结算账单统一存于 tiktok_bill_records；此前仍读取旧的
       // settlement_records，导致账单导入成功后管理列表一直显示为空。
       settlementPromise,
-      orderFilterQuery
+      orderFilterQuery,
+      authorizedShopFilterOptions(scopedShopIds)
     ]);
     // 订单明细是业务端的核心数据；筛选项查询失败时不应阻断订单本身展示。
     if (itemsError) {
@@ -848,11 +843,11 @@ async function listPaginatedOrderSettlementManagementData(request, response, sco
       const order = item.orders || {}; const paymentValues = [item.sku_subtotal_after_discount, item.shipping_fee_after_discount, item.payment_platform_discount];
       const paid = paymentValues.every(value => value === null || value === undefined) ? '—' : `${order.currency_code || item.currency_code} ${(Number(item.sku_subtotal_after_discount || 0) + Number(item.shipping_fee_after_discount || 0) - Number(item.payment_platform_discount || 0)).toFixed(2)}`;
       const productName = productNameByCode.get(item.product_code) || item.product_name || '—';
-      return { id: `${order.id}::${item.sku_id || 'no-sku'}`, orderId: order.id, number: order.order_number || '—', shop: order.shops?.shop_name || '—', site: order.shops?.country_code || '—', warehouse: order.warehouses?.name || order.warehouse_name || '—', warehouseOriginalName: order.warehouse_name || order.warehouses?.original_warehouse_name || order.warehouses?.name || '—', code: item.product_code || '—', sku: item.sku_id || '—', name: productName, qty: item.quantity || 0, paid, status: order.order_status || '—', refund: order.refund_status || '—', orderSubstatus: order.order_substatus || '—', refundAmount: `${order.currency_code || item.currency_code} ${Number(order.refund_amount || 0).toFixed(2)}`, tracking: order.tracking_number || '—', carrier: order.logistics_carrier || '—', deliveryOption: order.delivery_option || '—', ordered: order.ordered_at?.slice(0, 10) || '—', shipped: order.shipped_at?.slice(0, 10) || '—', updated: order.synced_at?.slice(0, 10) || '—', source: order.source_identifier || '—', profitData: '待结算', rawData: { ...(order.raw_data || {}), ...(item.raw_data || {}) }, items: [{ ...item, product_name: productName }] };
+      return { id: `${order.id}::${item.sku_id || 'no-sku'}`, orderId: order.id, number: order.order_number || '—', shop: order.shops?.shop_code || order.shops?.shop_name || '—', site: order.shops?.country_code || '—', warehouse: order.warehouses?.name || order.warehouse_name || '—', warehouseOriginalName: order.warehouse_name || order.warehouses?.original_warehouse_name || order.warehouses?.name || '—', code: item.product_code || '—', sku: item.sku_id || '—', name: productName, qty: item.quantity || 0, paid, status: order.order_status || '—', refund: order.refund_status || '—', orderSubstatus: order.order_substatus || '—', refundAmount: `${order.currency_code || item.currency_code} ${Number(order.refund_amount || 0).toFixed(2)}`, tracking: order.tracking_number || '—', carrier: order.logistics_carrier || '—', deliveryOption: order.delivery_option || '—', ordered: order.ordered_at?.slice(0, 10) || '—', shipped: order.shipped_at?.slice(0, 10) || '—', updated: order.synced_at?.slice(0, 10) || '—', source: order.source_identifier || '—', profitData: '待结算', rawData: { ...(order.raw_data || {}), ...(item.raw_data || {}) }, items: [{ ...item, product_name: productName }] };
     });
     const formattedSettlements = (settlements || []).map(record => ({ id: record.id, sourceType: record.source_type, replacementStatus: record.replacement_status, number: record.settlement_document_id || '—', date: record.settlement_date || record.transaction_created_at?.slice(0, 10) || '—', estimatedDate: record.estimated_settlement_at?.slice(0, 10) || record.raw_data?.['预计结算时间'] || record.raw_data?.['Estimated Settlement Time'] || '—', currency: record.currency_code, type: record.transaction_type, order: record.transaction_id || record.related_order_id || '—', relatedOrder: record.related_order_id || '—', sku: record.sku_id || '—', name: record.product_name || '—', qty: record.quantity || 0, amount: `${record.currency_code} ${billDisplayAmount(record).toFixed(2)}`, income: `${record.currency_code} ${Number(record.total_income || 0).toFixed(2)}`, fees: `${record.currency_code} ${Number(record.total_fees || 0).toFixed(2)}`, shop: record.shops?.shop_name || '—', batch: record.import_batch_id || '—', importStatus: record.source_type === 'settled' ? '已结算' : '未结算预估', syncedAt: record.updated_at, rawData: record.raw_data || {}, feeBreakdown: record.fee_breakdown || {}, unsettledReason: record.unsettled_reason || '—' }));
     const uniqueValues = (rows, key) => [...new Set((rows || []).map(row => row[key]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
-    sendJson(response, 200, { orders: formattedOrders, settlements: formattedSettlements, filterOptions: { orderStatuses: uniqueValues(orderFilterRows, 'order_status'), logisticsStatuses: uniqueValues(orderFilterRows, 'order_substatus') }, orderMeta: { orderItemCount: orderItemCount || 0, page, pageSize, totalPages: Math.max(1, Math.ceil((orderItemCount || 0) / pageSize)) } });
+    sendJson(response, 200, { orders: formattedOrders, settlements: formattedSettlements, filterOptions: { orderStatuses: uniqueValues(orderFilterRows, 'order_status'), logisticsStatuses: uniqueValues(orderFilterRows, 'order_substatus'), shops }, orderMeta: { orderItemCount: orderItemCount || 0, page, pageSize, totalPages: Math.max(1, Math.ceil((orderItemCount || 0) / pageSize)) } });
   } catch (error) { adminError(response, error); }
 }
 function importValue(row, ...keys) { for (const key of keys) { const value = row?.[key]; if (value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim(); } return ''; }
