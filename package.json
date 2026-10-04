@@ -5,7 +5,13 @@
   "description": "TikTok Shop multi-store profit calculation system",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "sync:scan": "node scripts/local-sync-assistant.js --once",
+    "sync:assign": "node scripts/local-sync-assistant.js --assign",
+    "sync:watch": "node scripts/local-sync-assistant.js --watch",
+    "tiktok:setup": "node scripts/tiktok-download-runner.js --setup",
+    "tiktok:check": "node scripts/tiktok-download-runner.js --check",
+    "tiktok:serve": "node scripts/tiktok-download-runner.js --serve"
   },
   "engines": {
     "node": ">=20"

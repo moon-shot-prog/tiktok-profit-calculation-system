@@ -7,6 +7,9 @@
 node_modules/
 npm-debug.log*
 *.log
+scripts/local-sync.config.json
+scripts/tiktok-automation.config.json
+.local-automation/
 
 # Supabase CLI machine-specific connection cache
 supabase/.temp/
