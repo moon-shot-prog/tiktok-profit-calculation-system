@@ -182,7 +182,13 @@ async function completeLogin(native, result) {
   } else {
     try { if (native.chrome && !native.chrome.killed) native.chrome.kill(); } catch (_) { /* no-op */ }
   }
-  console.log(JSON.stringify({ ...result, sessionOwner: Boolean(native.chrome && !native.reused) }));
+  // This helper is launched through spawnSync.  Playwright/CDP can retain
+  // internal handles even after its connection is closed, so merely returning
+  // from main may leave the parent forever at “检查登录”.  Flush the hand-off
+  // result first, then end this helper explicitly.  The detached Chrome is
+  // intentionally left alive for the next data task.
+  await new Promise(resolve => process.stdout.write(`${JSON.stringify({ ...result, sessionOwner: Boolean(native.chrome && !native.reused) })}\n`, resolve));
+  process.exit(0);
 }
 async function main() {
   const config = readConfig();
