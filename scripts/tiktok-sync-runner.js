@@ -25,17 +25,11 @@ function runStoreLogin(config, store) {
   }
   return result;
 }
-function loginOwnsSession(result) {
-  const output = String(result?.stdout || '').trim().split(/\r?\n/).reverse();
-  for (const line of output) {
-    try { return Boolean(JSON.parse(line).sessionOwner); } catch (_) { /* try prior line */ }
-  }
-  return false;
-}
 function closeStoreSession(profileKey) {
   // Cleanup happens only after every data type (and any bill retry) has had a
-  // chance to reuse the authenticated page.  It never closes a pre-existing
-  // browser session owned by the operator.
+  // chance to reuse the authenticated page.  The profiles are dedicated to
+  // the assistant, so this also closes an orphaned session reused from a
+  // previous interrupted run instead of accumulating Chrome windows.
   spawnSync(process.execPath, [closeSessionPath, '--store', profileKey], { encoding: 'utf8', timeout: 15000 });
 }
 
@@ -147,7 +141,7 @@ function main() {
     if (!isFailed(store[field])) store.unsettledBillBatchCode = isSettled ? store.unsettledBillBatchCode : store[field].batchCode;
     return store[field];
   };
-  const ownedSessionKeys = new Set();
+  const sessionKeys = new Set();
   try { for (const store of state.stores) {
     if (cancellationRequested(config.rootDir)) { state.status = 'cancelled'; state.message = '已收到取消请求，未启动后续店铺。'; break; }
     store.status = 'running'; store.startedAt = new Date().toISOString();
@@ -156,8 +150,10 @@ function main() {
     // First reuse the isolated Chrome session.  If TikTok has expired it, the
     // helper decrypts this store's locally protected credential just long
     // enough to fill the sign-in form.  Captcha/2FA remains a manual step.
+    // Always register the dedicated profile before login: failed logins must
+    // not leave a newly opened Chrome instance behind either.
+    sessionKeys.add(store.profileKey || 'default');
     const loginResult = runStoreLogin(config, store);
-    if (loginResult.status === 0 && loginOwnsSession(loginResult)) ownedSessionKeys.add(store.profileKey || 'default');
     store.login = {
       status: loginResult.status === 0 ? 'completed' : 'failed',
       error: loginResult.status === 0 ? null : String(loginResult.stderr || loginResult.stdout || '自动登录未返回结果').trim()
@@ -227,7 +223,7 @@ function main() {
     writeState(statePath, state);
     if (failures) process.exitCode = 1;
   } finally {
-    for (const profileKey of ownedSessionKeys) closeStoreSession(profileKey);
+    for (const profileKey of sessionKeys) closeStoreSession(profileKey);
     try { fs.unlinkSync(lockPath); } catch (_) { /* no-op */ }
   }
 }

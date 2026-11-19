@@ -25,13 +25,6 @@ function runStoreLogin(config, store, type) {
   }
   return result;
 }
-function loginOwnsSession(result) {
-  const output = String(result?.stdout || '').trim().split(/\r?\n/).reverse();
-  for (const line of output) {
-    try { return Boolean(JSON.parse(line).sessionOwner); } catch (_) { /* try prior line */ }
-  }
-  return false;
-}
 function closeStoreSession(profileKey) { spawnSync(process.execPath, [closeSessionPath, '--store', profileKey], { encoding: 'utf8', timeout: 15000 }); }
 function read(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; } }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8'); }
@@ -54,13 +47,13 @@ function main() {
   const statePath = path.join(config.rootDir, '待处理', '同步助手状态.json');
   const activeLock = acquireLock(config.rootDir);
   const state = { mode: 'custom_range', status: 'running', startedAt: new Date().toISOString(), completedAt: null, ranges, message: '正在按自定义日期范围同步…', stores: stores.map(shop => ({ store: shop.sellerCenterName, countryCode: shop.countryCode, profileKey: shop.profileKey || 'default', status: 'waiting' })) };
-  writeState(statePath, state); let failures = 0; const ownedSessionKeys = new Set();
+  writeState(statePath, state); let failures = 0; const sessionKeys = new Set();
   try { for (const store of state.stores) {
     if (cancelled(config.rootDir)) { state.status = 'cancelled'; state.message = '已收到取消请求，未启动后续店铺。'; break; }
     store.status = 'running'; state.message = `正在检查登录：${store.store}`; writeState(statePath, state);
     const firstType = Object.keys(ranges)[0];
+    sessionKeys.add(store.profileKey || 'default');
     const login = runStoreLogin(config, store, firstType);
-    if (login.status === 0 && loginOwnsSession(login)) ownedSessionKeys.add(store.profileKey || 'default');
     store.login = { status: login.status === 0 ? 'completed' : 'failed', error: login.status === 0 ? null : String(login.stderr || login.stdout || '自动登录失败').trim() };
     if (login.status !== 0) { store.status = 'failed'; store.error = store.login.error; failures += 1; writeState(statePath, state); continue; }
     for (const [type, range] of Object.entries(ranges)) {
@@ -81,6 +74,6 @@ function main() {
     store.completedAt = new Date().toISOString(); writeState(statePath, state);
   }
   state.completedAt = new Date().toISOString(); if (state.status !== 'cancelled') state.status = failures ? 'completed_with_errors' : 'completed'; state.message = state.status === 'cancelled' ? '范围同步已取消。' : (failures ? `范围同步完成：${stores.length - failures} 家通过，${failures} 家需要处理。` : `范围同步完成：${stores.length} 家店铺均通过。`); writeState(statePath, state); if (failures) process.exitCode = 1;
-  } finally { for (const profileKey of ownedSessionKeys) closeStoreSession(profileKey); try { fs.unlinkSync(activeLock); } catch (_) {} }
+  } finally { for (const profileKey of sessionKeys) closeStoreSession(profileKey); try { fs.unlinkSync(activeLock); } catch (_) {} }
 }
 try { main(); } catch (error) { console.error(error.stack || error.message); process.exitCode = 1; }
