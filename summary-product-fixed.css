@@ -1,36 +1,84 @@
-/* 商品利润页：筛选与控制区固定，只有产品明细表格可以滚动。 */
+/* 利润汇总：筛选与控制区固定，只有当前明细表格可以滚动。 */
 .summary-page.summary-product-fixed {
+  height: calc(100vh - 72px);
+  box-sizing: border-box;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 14px;
   overflow: hidden;
 }
-.summary-page.summary-product-fixed > .summary-filters { position: static; margin: 0; padding: 18px 0; }
+.summary-page.summary-product-fixed > .summary-filters {
+  grid-row: 1;
+  position: relative;
+  top: 0;
+  z-index: 40;
+  min-height: 94px;
+  overflow: visible;
+  margin: 0;
+  padding: 18px 0;
+}
+.summary-page.summary-product-fixed > .profit-control-bar {
+  grid-row: 2;
+  position: relative;
+  z-index: 20;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 66px;
+  box-sizing: border-box;
+  overflow: visible !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.summary-page.summary-product-fixed > .profit-control-bar > div,
+.summary-page.summary-product-fixed > .profit-control-bar .profit-tab-actions {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.summary-page.summary-product-fixed > .profit-control-bar > div:first-child { display: block !important; }
 .summary-page.summary-product-fixed > .summary-scope { margin: 0; }
 .summary-page.summary-product-fixed > .summary-kpis,
 .summary-page.summary-product-fixed > .summary-grid { display: none; }
 .summary-page.summary-product-fixed > .summary-detail {
+  grid-row: 3;
+  position: relative;
+  z-index: 1;
   min-height: 0;
   margin: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
+.summary-page.summary-product-fixed #profitTabStore:not(.is-hidden),
 .summary-page.summary-product-fixed #profitTabProduct:not(.is-hidden) {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
+.summary-page.summary-product-fixed #profitTabStore:not(.is-hidden) {
+  grid-template-rows: minmax(0, 1fr);
+}
+.summary-page.summary-product-fixed .profit-store-table-scroll,
 .summary-page.summary-product-fixed .profit-product-table-scroll {
+  width: 100%;
+  height: 100%;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
+.summary-page.summary-product-fixed .profit-store-table-scroll table,
 .summary-page.summary-product-fixed .profit-product-table-scroll table { margin-top: 0; }
-.summary-page.summary-product-fixed .profit-product-table-scroll thead th {
+.summary-page.summary-product-fixed .profit-store-table-scroll thead,
+.summary-page.summary-product-fixed .profit-product-table-scroll thead {
   position: sticky;
   top: 0;
-  z-index: 1;
+  left: 0;
+  z-index: 3;
+}
+.summary-page.summary-product-fixed .profit-store-table-scroll thead th,
+.summary-page.summary-product-fixed .profit-product-table-scroll thead th {
   background: #fff;
 }
 @media (max-width: 760px) {

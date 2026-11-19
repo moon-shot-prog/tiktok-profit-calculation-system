@@ -1,5 +1,5 @@
 -- TikTok Profit Calculation System: initial business core
--- Run through Supabase CLI / SQL editor using an owner role. Browser users are
+-- Run through a PostgreSQL SQL client using an owner role. Browser users are
 -- restricted by the RLS policies below; no authorization uses user_metadata.
 
 create schema if not exists private;

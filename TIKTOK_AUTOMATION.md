@@ -1,6 +1,6 @@
 # TikTok 自动下载运行器
 
-该运行器使用独立的本机 Chrome 配置，不读取或改变原有 Chrome 配置，不保存 TikTok 密码，也不向 GitHub、Render 或 Supabase 发送登录信息。
+该运行器使用独立的本机 Chrome 配置，不读取或改变原有 Chrome 配置，不保存 TikTok 密码，也不向外部部署平台发送登录信息。
 
 ## 首次准备
 

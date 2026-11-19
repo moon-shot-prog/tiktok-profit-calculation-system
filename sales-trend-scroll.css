@@ -1,0 +1,9 @@
+/* 销售趋势仅在自身卡片内横向滚动，避免长日期序列覆盖相邻模块。 */
+.trend-card { min-width: 0; overflow: hidden; }
+.sales-chart-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: 5px; }
+.sales-chart-scroll .chart-area { flex: 0 0 auto; min-width: 640px; }
+.sales-chart-scroll .chart-x { gap: 12px; justify-content: space-between; }
+.sales-chart-scroll .chart-x span { min-width: 42px; text-align: center; white-space: nowrap; }
+.sales-chart-scroll::-webkit-scrollbar { height: 7px; }
+.sales-chart-scroll::-webkit-scrollbar-thumb { border-radius: 6px; background: #c6d4e3; }
+.sales-chart-scroll::-webkit-scrollbar-track { background: #edf3f8; }

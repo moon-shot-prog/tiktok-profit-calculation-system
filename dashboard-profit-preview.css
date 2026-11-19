@@ -1,0 +1,19 @@
+.profit-preview {
+  margin: 10px 0 20px;
+  padding: 18px 20px 20px;
+  border-radius: 12px;
+  border: 1px solid #dfe8f3;
+  background: #fff;
+  color: #213854;
+  box-shadow: 0 6px 18px rgba(40, 78, 122, .07);
+}
+.profit-preview-title { color: #274666; font-size: 13px; font-weight: 700; }
+.profit-preview-title small { margin-left: 10px; color: #7890aa; font-size: 12px; font-weight: 400; }
+.profit-preview-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.profit-preview article { min-width: 0; min-height: 126px; padding: 16px; border: 1px solid #e3ebf5; border-radius: 10px; background: #fafdff; box-shadow: 0 2px 7px rgba(41, 76, 119, .05); }
+.profit-preview article span { display: block; color: #627b98; font-size: 13px; font-weight: 700; }
+.profit-preview article strong { display: block; overflow: hidden; margin: 8px 0 4px; color: #1a3654; font-size: clamp(21px, 1.55vw, 29px); line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.profit-preview article small { display: block; color: #7188a2; font-size: 12px; line-height: 1.42; }
+.profit-preview .preview-settlement span { color: #2589cc; }.profit-preview .preview-product span { color: #7a68c8; }.profit-preview .preview-warehouse span { color: #5875bc; }.profit-preview .preview-promotion span { color: #178fae; }.profit-preview .preview-profit span, .profit-preview .preview-margin span { color: #239b6e; }.profit-preview .preview-profit strong, .profit-preview .preview-margin strong { color: #168459; }
+@media (max-width: 1300px) { .profit-preview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .profit-preview { padding: 14px; }.profit-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }.profit-preview article { min-height: 112px; padding: 13px; }.profit-preview-title small { display: block; margin: 5px 0 0; } }

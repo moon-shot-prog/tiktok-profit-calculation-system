@@ -13,6 +13,8 @@
   let settlementFilters = {};
   let warehouseOptions = [];
   let warehouseFilterNames = new Map();
+  let warehouseCache = { token: '', expiresAt: 0, data: null };
+  const detailCache = new Map();
   const billPreviewRows = {
     unsettled: [
       ['未结算预估', '5849320112456789012', 'SKU-692684800610874', '预估结算中', '纳入预估利润'],
@@ -32,18 +34,41 @@
   let settlementViewTab = 'unsettled', showSupersededUnsettled = false;
   const esc = value => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const session = () => { try { return JSON.parse(localStorage.getItem('tiktokShopAuthSession') || sessionStorage.getItem('tiktokShopAuthSession') || '{}'); } catch { return {}; } };
-  const api = async (path, options = {}) => { const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${session().accessToken || ''}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}) } }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.message || '请求失败'); return data; };
+  const api = async (path, options = {}) => {
+    const { retryOnNetworkError = false, ...fetchOptions } = options;
+    const attempts = retryOnNetworkError ? 2 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const response = await fetch(path, { ...fetchOptions, headers: { Authorization: `Bearer ${session().accessToken || ''}`, ...(fetchOptions.body ? { 'Content-Type': 'application/json' } : {}) } });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.message || '请求失败');
+        return data;
+      } catch (error) {
+        if (attempt + 1 < attempts) { await new Promise(resolve => setTimeout(resolve, 400)); continue; }
+        if (error instanceof TypeError && /fetch|network/i.test(error.message || '')) throw new Error('无法连接本机服务，请确认服务已启动后刷新页面重试');
+        throw error;
+      }
+    }
+  };
+  async function loadWarehouses(headers, token) {
+    if (warehouseCache.token === token && warehouseCache.data && Date.now() < warehouseCache.expiresAt) return warehouseCache.data;
+    const response = await fetch('/api/admin/warehouses', { headers });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) warehouseCache = { token, expiresAt: Date.now() + 5 * 60 * 1000, data };
+    return { ...data, _ok: response.ok };
+  }
   async function load() {
-    const headers = { Authorization: `Bearer ${session().accessToken || ''}` };
+    const token = session().accessToken || '';
+    const headers = { Authorization: `Bearer ${token}` };
     const query = currentTab === 'settlements'
       ? new URLSearchParams({ view: 'settlements', page: String(settlementPage), pageSize: String(settlementPageSize), settlementTab: settlementViewTab, includeSuperseded: String(showSupersededUnsettled), ...Object.fromEntries(Object.entries(settlementFilters).filter(([, value]) => value)) })
       : new URLSearchParams({ page: String(orderPage), pageSize: String(orderPageSize), ...Object.fromEntries(Object.entries(orderFilters).filter(([, value]) => value)) });
-    const [response, warehouseResponse] = await Promise.all([fetch(`/api/admin/order-settlements?${query.toString()}`, { headers }), fetch('/api/admin/warehouses', { headers })]);
-    const [data, warehouseData] = await Promise.all([response.json().catch(() => ({})), warehouseResponse.json().catch(() => ({}))]);
-    if (!response.ok) throw new Error(data.message || '读取订单与结算数据失败');
+    const [response, warehouseData] = await Promise.all([fetch(`/api/admin/order-settlements?${query.toString()}`, { headers }), loadWarehouses(headers, token)]);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(response.status === 503 ? '系统服务正在恢复，请约 1 分钟后重试' : (data.message || '读取订单与结算数据失败'));
     orders = data.orders || []; settlements = data.settlements || []; orderMeta = data.orderMeta || orderMeta; settlementMeta = data.settlementMeta || settlementMeta; orderFilterOptions = data.filterOptions || orderFilterOptions; shopFilterOptions = orderFilterOptions.shops || shopFilterOptions;
     warehouseFilterNames = new Map();
-    warehouseOptions = warehouseResponse.ok ? [...new Set((warehouseData.warehouses || []).filter(item => item.is_active).map(item => { const name = item.name; if (!name) return null; warehouseFilterNames.set(String(name).toLowerCase(), [name, item.original_warehouse_name].filter(Boolean).map(value => String(value).toLowerCase())); return name; }).filter(Boolean))] : [];
+    warehouseOptions = warehouseData._ok === false ? [] : [...new Set((warehouseData.warehouses || []).filter(item => item.is_active).map(item => { const name = item.name; if (!name) return null; warehouseFilterNames.set(String(name).toLowerCase(), [name, item.original_warehouse_name].filter(Boolean).map(value => String(value).toLowerCase())); return name; }).filter(Boolean))];
   }
   function topbar() {
     document.querySelector('.admin-topbar .eyebrow').textContent = 'OPERATION DATA';
@@ -90,6 +115,25 @@
     drawer.innerHTML = `<button class="drawer-close">×</button><p class="eyebrow">${item.sourceType === 'settled' ? '已结算账单详情' : '未结算账单详情'}</p><h2>${esc(item.number)}</h2><div class="order-detail-grid">${[['数据来源', item.sourceType === 'settled' ? '已结算账单' : '未结算账单'], ['利润状态', item.replacementStatus === 'superseded' ? '已替代，不参与利润统计' : item.replacementStatus === 'needs_review' ? '待核对，不自动参与统计' : item.sourceType === 'settled' ? '实际利润，优先使用' : '预估利润'], ['结算/创建日期', item.date], ['预计结算日期', item.estimatedDate || '—'], ['结算货币', item.currency], ['交易类型', item.type], ['订单/调整单 ID', item.order], ['相关订单 ID', item.relatedOrder], ['SKU ID', item.sku], ['商品名称', item.name], ['数量', item.qty], ['结算/预计金额', item.amount], ['总收入', item.income], ['总费用', item.fees], ['未结算原因', item.unsettledReason], ['所属店铺', item.shop]].map(row => `<div>${esc(row[0])}<strong>${esc(row[1])}</strong></div>`).join('')}</div><h3>费用与调整明细</h3><table><thead><tr><th>项目</th><th>金额</th></tr></thead><tbody>${fees.map(row => `<tr><td>${esc(row[0])}</td><td>${esc(row[1])}</td></tr>`).join('') || '<tr><td colspan="2">原始账单未提供可拆分的费用字段</td></tr>'}</tbody></table><h3>完整原始字段</h3><table><thead><tr><th>字段</th><th>值</th></tr></thead><tbody>${rawRows || '<tr><td colspan="2">无</td></tr>'}</tbody></table>`;
     drawer.classList.remove('is-hidden'); drawer.querySelector('.drawer-close').onclick = () => drawer.classList.add('is-hidden');
   }
+  async function loadDetail(type, id, sku = '') {
+    const key = `${type}:${id}:${sku}`;
+    if (detailCache.has(key)) return detailCache.get(key);
+    const data = await api(`/api/admin/order-settlements/detail?${new URLSearchParams({ type, id, ...(sku ? { sku } : {}) })}`);
+    detailCache.set(key, data);
+    return data;
+  }
+  async function showOrderDetail(item) {
+    drawer.innerHTML = '<button class="drawer-close">×</button><p class="eyebrow">订单详情</p><p>正在读取完整导入字段…</p>';
+    drawer.classList.remove('is-hidden'); drawer.querySelector('.drawer-close').onclick = () => drawer.classList.add('is-hidden');
+    try { openOrder({ ...item, ...(await loadDetail('order', item.orderId, item.sku)) }); }
+    catch (error) { drawer.innerHTML = `<button class="drawer-close">×</button><p class="eyebrow">订单详情</p><p>${esc(error.message || '读取详情失败')}</p>`; drawer.querySelector('.drawer-close').onclick = () => drawer.classList.add('is-hidden'); }
+  }
+  async function showSettlementDetail(item) {
+    drawer.innerHTML = '<button class="drawer-close">×</button><p class="eyebrow">账单详情</p><p>正在读取完整原始字段…</p>';
+    drawer.classList.remove('is-hidden'); drawer.querySelector('.drawer-close').onclick = () => drawer.classList.add('is-hidden');
+    try { openSettlement({ ...item, ...(await loadDetail('settlement', item.id)) }); }
+    catch (error) { drawer.innerHTML = `<button class="drawer-close">×</button><p class="eyebrow">账单详情</p><p>${esc(error.message || '读取详情失败')}</p>`; drawer.querySelector('.drawer-close').onclick = () => drawer.classList.add('is-hidden'); }
+  }
   function parseCsv(text) {
     const rows = []; let row = [], cell = '', quoted = false;
     for (let index = 0; index < text.length; index++) { const char = text[index], next = text[index + 1]; if (char === '"' && quoted && next === '"') { cell += '"'; index++; } else if (char === '"') quoted = !quoted; else if (char === ',' && !quoted) { row.push(cell.trim()); cell = ''; } else if ((char === '\n' || char === '\r') && !quoted) { if (char === '\r' && next === '\n') index++; row.push(cell.trim()); if (row.some(value => value)) rows.push(row); row = []; cell = ''; } else cell += char; }
@@ -102,15 +146,6 @@
     const bytes = await file.arrayBuffer();
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { return new TextDecoder('gbk').decode(bytes); }
-  }
-  async function archiveOriginalImport(file, batchCode, category) {
-    const saved = await window.localImportArchive?.save(file, batchCode, category);
-    return saved?.location === 'folder' ? `原始文件已保存到本地归档文件夹“${saved.folder}”。` : '原始文件已开始下载到本机。';
-  }
-  function bindArchiveFolderButton(container) {
-    const button = container.querySelector('[data-local-archive-folder]'), note = container.querySelector('[data-local-archive-note]');
-    if (!button || !note) return;
-    button.onclick = async () => { try { const folder = await window.localImportArchive.chooseDirectory(); note.textContent = `已选择本地归档文件夹：${folder}`; } catch (error) { note.textContent = error.message || '未选择本地归档文件夹'; } };
   }
   async function exportOrderData() {
     const query = new URLSearchParams({ page: '1', pageSize: '100', export: 'csv', ...Object.fromEntries(Object.entries(orderFilters).filter(([, value]) => value)) });
@@ -141,16 +176,15 @@
     importPanel.classList.remove('is-hidden'); importPanel.querySelector('.drawer-close').onclick = () => importPanel.classList.add('is-hidden');
     try {
       const data = await api('/api/admin/order-import-configuration'); const shops = data.shops || [];
-      importPanel.innerHTML = `<button class="drawer-close" type="button">×</button><h2>导入订单明细</h2><p>上传 CSV 后系统先校验，不会覆盖已有数据；确认导入后，仅当 Cancelation/Return Type 变化时更新原订单行。</p><form id="orderImportForm"><label>导入批次<input id="importBatchCode" value="校验后自动生成，例如 IMP-20260914-001" readonly></label><label>店铺简称<select id="importShopId"><option value="">请选择店铺简称</option>${shops.map(shop => `<option value="${shop.id}" data-country="${shop.country_code}" data-currency="${shop.currency_code}">${shop.shop_code || shop.shop_name}</option>`).join('')}</select></label><label>国家站点<input id="importCountry" readonly></label><label>货币类型<input id="importCurrency" readonly></label><label class="order-import-file">上传 CSV<input id="importFile" type="file" accept=".csv,text/csv" required><small>使用英文 TikTok 表头：Order ID、SKU ID、Created Time 为必填；其余字段可按导出文件完整保留。</small></label><button type="button" data-local-archive-folder>选择本地归档文件夹</button><small data-local-archive-note>请先选择 G:\源文件；成功导入后原文件会保存到该文件夹。</small><button id="orderImportPreview" type="submit">校验并预览</button></form><section id="orderImportPreviewResult" class="order-import-result is-hidden"></section>`;
+      importPanel.innerHTML = `<button class="drawer-close" type="button">×</button><h2>导入订单明细</h2><p>上传 CSV 后系统先校验，不会覆盖已有数据；确认导入后，仅当 Cancelation/Return Type 变化时更新原订单行。</p><form id="orderImportForm"><label>导入批次<input id="importBatchCode" value="校验后自动生成，例如 IMP-20260914-001" readonly></label><label>店铺简称<select id="importShopId"><option value="">请选择店铺简称</option>${shops.map(shop => `<option value="${shop.id}" data-country="${shop.country_code}" data-currency="${shop.currency_code}">${shop.shop_code || shop.shop_name}</option>`).join('')}</select></label><label>国家站点<input id="importCountry" readonly></label><label>货币类型<input id="importCurrency" readonly></label><label class="order-import-file">上传 CSV<input id="importFile" type="file" accept=".csv,text/csv" required><small>使用英文 TikTok 表头：Order ID、SKU ID、Created Time 为必填；其余字段可按导出文件完整保留。</small></label><button id="orderImportPreview" type="submit">校验并预览</button></form><section id="orderImportPreviewResult" class="order-import-result is-hidden"></section>`;
       importPanel.querySelector('.drawer-close').onclick = () => importPanel.classList.add('is-hidden');
-      bindArchiveFolderButton(importPanel);
       const shopSelect = importPanel.querySelector('#importShopId');
       shopSelect.onchange = () => { const option = shopSelect.selectedOptions[0]; importPanel.querySelector('#importCountry').value = option?.dataset.country || ''; importPanel.querySelector('#importCurrency').value = option?.dataset.currency || ''; };
       importPanel.querySelector('#orderImportForm').onsubmit = async event => {
         event.preventDefault(); const file = importPanel.querySelector('#importFile').files[0]; const shopId = shopSelect.value;
         if (!file || !shopId) return window.alert('请选择店铺简称和 CSV 文件');
         const result = importPanel.querySelector('#orderImportPreviewResult'); result.classList.remove('is-hidden'); result.textContent = '正在校验文件…';
-        try { const rows = parseCsv(await readOrderCsv(file)); const preview = await api('/api/admin/order-imports/orders', { method: 'POST', body: JSON.stringify({ mode: 'preview', shopId, fileName: file.name, rows }) }); if (!preview.valid) { result.innerHTML = `<strong>校验失败</strong><p>${preview.message}</p><ul>${preview.failures.slice(0, 10).map(item => `<li>第 ${item.row} 行：${item.reason}</li>`).join('')}</ul>`; return; } importPanel.querySelector('#importBatchCode').value = preview.batchCode; const changes = preview.changeDetails?.length ? `<details><summary>查看更新字段（${preview.updateCount} 条）</summary><ul>${preview.changeDetails.map(item => `<li>${esc(item.orderNumber)} / ${esc(item.skuId)}：${item.fields.map(esc).join('、')}</li>`).join('')}</ul></details>` : ''; result.innerHTML = `<strong>校验完成 · ${preview.batchCode}</strong><p>店铺：${preview.shop.code || preview.shop.name} · ${preview.shop.countryCode} · ${preview.shop.currencyCode}</p><div><b>新增 ${preview.insertCount}</b><b>更新 ${preview.updateCount}</b><b>跳过 ${preview.skipCount}</b></div>${changes}<button type="button" id="orderImportCommit">确认写入</button>`; importPanel.querySelector('#orderImportCommit').onclick = async () => { if (!window.confirm('确认写入已校验的订单数据吗？')) return; const commitButton = importPanel.querySelector('#orderImportCommit'); commitButton.disabled = true; result.textContent = '正在写入订单数据，请勿关闭页面…'; try { const committed = await api('/api/admin/order-imports/orders', { method: 'POST', body: JSON.stringify({ mode: 'commit', shopId, fileName: file.name, rows }) }); const archiveMessage = await archiveOriginalImport(file, committed.batchCode, '订单明细'); result.innerHTML = `<strong>${committed.message}</strong><p>导入批次：${committed.batchCode}；${archiveMessage}</p>`; await load(); bind(); } catch (error) { result.innerHTML = `<strong>写入失败</strong><p>${esc(error.message || '请稍后重试')}</p><button type="button" id="orderImportRetry">返回校验结果</button>`; importPanel.querySelector('#orderImportRetry').onclick = () => importPanel.querySelector('#orderImportForm').dispatchEvent(new Event('submit', { cancelable: true })); } }; } catch (error) { result.textContent = error.message; };
+        try { const rows = parseCsv(await readOrderCsv(file)); const preview = await api('/api/admin/order-imports/orders', { method: 'POST', body: JSON.stringify({ mode: 'preview', shopId, fileName: file.name, rows }), retryOnNetworkError: true }); if (!preview.valid) { result.innerHTML = `<strong>校验失败</strong><p>${preview.message}</p><ul>${preview.failures.slice(0, 10).map(item => `<li>第 ${item.row} 行：${item.reason}</li>`).join('')}</ul>`; return; } importPanel.querySelector('#importBatchCode').value = preview.batchCode; const changes = preview.changeDetails?.length ? `<details><summary>查看更新字段（${preview.updateCount} 条）</summary><ul>${preview.changeDetails.map(item => `<li>${esc(item.orderNumber)} / ${esc(item.skuId)}：${item.fields.map(esc).join('、')}</li>`).join('')}</ul></details>` : ''; result.innerHTML = `<strong>校验完成 · ${preview.batchCode}</strong><p>店铺：${preview.shop.code || preview.shop.name} · ${preview.shop.countryCode} · ${preview.shop.currencyCode}</p><div><b>新增 ${preview.insertCount}</b><b>更新 ${preview.updateCount}</b><b>跳过 ${preview.skipCount}</b></div>${changes}<button type="button" id="orderImportCommit">确认写入</button>`; importPanel.querySelector('#orderImportCommit').onclick = async () => { if (!window.confirm('确认写入已校验的订单数据吗？')) return; const commitButton = importPanel.querySelector('#orderImportCommit'); commitButton.disabled = true; result.textContent = '正在写入订单数据，请勿关闭页面…'; try { const committed = await api('/api/admin/order-imports/orders', { method: 'POST', body: JSON.stringify({ mode: 'commit', shopId, fileName: file.name, rows }) }); result.innerHTML = `<strong>${committed.message}</strong><p>导入批次：${committed.batchCode}</p>`; await load(); bind(); } catch (error) { result.innerHTML = `<strong>写入失败</strong><p>${esc(error.message || '请稍后重试')}</p><button type="button" id="orderImportRetry">返回校验结果</button>`; importPanel.querySelector('#orderImportRetry').onclick = () => importPanel.querySelector('#orderImportForm').dispatchEvent(new Event('submit', { cancelable: true })); } }; } catch (error) { result.textContent = error.message; };
       };
     } catch (error) { importPanel.innerHTML = `<button class="drawer-close" type="button">×</button><h2>导入订单明细</h2><p>${error.message}</p>`; importPanel.querySelector('.drawer-close').onclick = () => importPanel.classList.add('is-hidden'); }
   }
@@ -159,9 +193,8 @@
     importPanel.classList.remove('is-hidden'); importPanel.querySelector('.drawer-close').onclick = () => importPanel.classList.add('is-hidden');
     try {
       const data = await api('/api/admin/order-import-configuration'); const shops = data.shops || [];
-      importPanel.innerHTML = `<button class="drawer-close" type="button">×</button><p class="eyebrow">账单导入</p><h2>账单导入与替代预览</h2><p>导入后，未结算账单用于预估利润；已结算账单按店铺、交易类型、订单/调整单 ID、SKU ID 精确匹配后优先使用。无法精确匹配的调整单会进入待核对。</p><form id="billImportForm"><label>导入批次<input id="billImportBatchCode" readonly></label><label>账单类型<select id="billImportType"><option value="unsettled">未结算账单（预估利润）</option><option value="settled">已结算账单（实际利润）</option></select></label><label>店铺简称<select id="billImportShop"><option value="">请选择店铺简称</option>${shops.map(shop => `<option value="${shop.id}" data-country="${shop.country_code}" data-currency="${shop.currency_code}">${esc(shop.shop_code || shop.shop_name)}</option>`).join('')}</select></label><label>国家站点<input id="billImportCountry" readonly></label><label>货币类型<input id="billImportCurrency" readonly></label><label class="order-import-file">上传账单文件<input id="billImportFile" type="file" accept=".csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><small>已结算表需包含：结算日期、结算单 ID、交易类型、订单ID/调整单ID、SKU ID、结算总金额。未结算表需包含：交易类型、订单ID/调整单ID、SKU ID、预计结算金额、预计结算时间。</small></label><button type="button" data-local-archive-folder>选择本地归档文件夹</button><small data-local-archive-note>请先选择 G:\源文件；成功导入后原文件会保存到该文件夹。</small><button type="submit">生成校验与替代预览</button></form><section id="billImportPreviewResult" class="order-import-result is-hidden"></section>`;
+      importPanel.innerHTML = `<button class="drawer-close" type="button">×</button><p class="eyebrow">账单导入</p><h2>账单导入与替代预览</h2><p>导入后，未结算账单用于预估利润；已结算账单按店铺、交易类型、订单/调整单 ID、SKU ID 精确匹配后优先使用。无法精确匹配的调整单会进入待核对。</p><form id="billImportForm"><label>导入批次<input id="billImportBatchCode" readonly></label><label>账单类型<select id="billImportType"><option value="unsettled">未结算账单（预估利润）</option><option value="settled">已结算账单（实际利润）</option></select></label><label>店铺简称<select id="billImportShop"><option value="">请选择店铺简称</option>${shops.map(shop => `<option value="${shop.id}" data-country="${shop.country_code}" data-currency="${shop.currency_code}">${esc(shop.shop_code || shop.shop_name)}</option>`).join('')}</select></label><label>国家站点<input id="billImportCountry" readonly></label><label>货币类型<input id="billImportCurrency" readonly></label><label class="order-import-file">上传账单文件<input id="billImportFile" type="file" accept=".csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><small>已结算表需包含：结算日期、结算单 ID、交易类型、订单ID/调整单ID、SKU ID、结算总金额。未结算表需包含：交易类型、订单ID/调整单ID、SKU ID、预计结算金额、预计结算时间。</small></label><button type="submit">生成校验与替代预览</button></form><section id="billImportPreviewResult" class="order-import-result is-hidden"></section>`;
       importPanel.querySelector('.drawer-close').onclick = () => importPanel.classList.add('is-hidden');
-      bindArchiveFolderButton(importPanel);
       const typeSelect = importPanel.querySelector('#billImportType'), shopSelect = importPanel.querySelector('#billImportShop'), batchCodeInput = importPanel.querySelector('#billImportBatchCode');
       const updateBatchHint = () => { const date = new Date().toISOString().slice(0, 10).replace(/-/g, ''); batchCodeInput.value = `${typeSelect.value === 'settled' ? '已结算' : '未结算'}-${date}-001（校验后确认）`; };
       typeSelect.value = kind; updateBatchHint(); typeSelect.onchange = updateBatchHint;
@@ -178,8 +211,9 @@
           if (!preview.valid) { result.innerHTML = `<strong>校验失败</strong><p>${esc(preview.message)}</p><ul>${(preview.failures || []).slice(0, 10).map(item => `<li>第 ${item.row} 行：${esc(item.reason)}</li>`).join('')}</ul>`; return; }
           batchCodeInput.value = preview.batchCode; const changeRows = (preview.changeDetails || []).map(item => `<tr><td>${esc(item.transactionId)}</td><td>${esc(item.skuId)}</td><td>${item.fields.map(esc).join('、')}</td><td>更新同来源账单记录</td></tr>`).join('');
           const batchHint = preview.writeBatchCount > 1 ? `本文件共 ${preview.totalRows} 条，确认后将按每 ${preview.writeBatchSize} 条分 ${preview.writeBatchCount} 批安全写入。` : `本文件共 ${preview.totalRows} 条；将按安全批次写入。`;
-          result.innerHTML = `<strong>校验完成 · ${esc(preview.batchCode)}</strong><p>文件：${esc(file.name)} · 店铺：${esc(shop.textContent)} · ${esc(shop.dataset.country || '—')} · ${esc(shop.dataset.currency || '—')}</p><div class="bill-preview-counts"><b>新增 ${preview.insertCount}</b><b>更新 ${preview.updateCount}</b><b>跳过 ${preview.skipCount}</b><b>${type === 'settled' ? '替代预估' : '已被结算替代'} ${preview.replaceCount}</b><b class="warn">待核对 ${preview.reviewCount}</b></div>${changeRows ? `<table class="bill-preview-table"><thead><tr><th>订单/调整单 ID</th><th>SKU ID</th><th>变更字段</th><th>处理方式</th></tr></thead><tbody>${changeRows}</tbody></table>` : ''}<p class="bill-preview-rule">${batchHint} ${type === 'settled' ? '确认后，精确匹配的未结算记录会保留历史但标记为“已替代”，利润统计将优先使用已结算数据。' : '确认后，若系统已有同一交易的已结算记录，该未结算行会自动标记为“已替代”；否则纳入预估利润。'}</p><button type="button" id="billImportCommit">确认导入</button>`;
-          importPanel.querySelector('#billImportCommit').onclick = async () => { if (!window.confirm('确认写入已校验账单并执行替代规则吗？')) return; result.textContent = '正在写入账单并更新替代状态…'; const committed = await api('/api/admin/bill-imports', { method: 'POST', body: JSON.stringify({ ...payload, mode: 'commit' }) }); const archiveMessage = await archiveOriginalImport(file, committed.batchCode, type === 'settled' ? '已结算账单' : '未结算账单'); importPanel.classList.add('is-hidden'); await load(); bind(); window.alert(`${committed.message}\n导入批次：${committed.batchCode}\n${archiveMessage}`); };
+          const detailTable = changeRows ? `<details class="bill-preview-details"><summary>具体明细（${preview.changeDetails.length} 条）</summary><div class="bill-preview-table-wrap"><table class="bill-preview-table"><thead><tr><th>订单/调整单 ID</th><th>SKU ID</th><th>变更字段</th><th>处理方式</th></tr></thead><tbody>${changeRows}</tbody></table></div></details>` : '';
+          result.innerHTML = `<strong>校验完成 · ${esc(preview.batchCode)}</strong><p>文件：${esc(file.name)} · 店铺：${esc(shop.textContent)} · ${esc(shop.dataset.country || '—')} · ${esc(shop.dataset.currency || '—')}</p><div class="bill-preview-counts"><b>新增 ${preview.insertCount}</b><b>更新 ${preview.updateCount}</b><b>跳过 ${preview.skipCount}</b><b>${type === 'settled' ? '替代预估' : '已被结算替代'} ${preview.replaceCount}</b><b class="warn">待核对 ${preview.reviewCount}</b></div>${detailTable}<p class="bill-preview-rule">${batchHint} ${type === 'settled' ? '确认后，精确匹配的未结算记录会保留历史但标记为“已替代”，利润统计将优先使用已结算数据。' : '确认后，若系统已有同一交易的已结算记录，该未结算行会自动标记为“已替代”；否则纳入预估利润。'}</p><button type="button" id="billImportCommit">确认导入</button>`;
+          importPanel.querySelector('#billImportCommit').onclick = async () => { if (!window.confirm('确认写入已校验账单并执行替代规则吗？')) return; result.textContent = '正在写入账单并更新替代状态…'; const committed = await api('/api/admin/bill-imports', { method: 'POST', body: JSON.stringify({ ...payload, mode: 'commit' }) }); importPanel.classList.add('is-hidden'); await load(); bind(); window.alert(`${committed.message}\n导入批次：${committed.batchCode}`); };
         } catch (error) { result.textContent = error.message; }
       };
     } catch (error) { importPanel.innerHTML = `<button class="drawer-close" type="button">×</button><h2>账单导入与替代预览</h2><p>${esc(error.message)}</p>`; importPanel.querySelector('.drawer-close').onclick = () => importPanel.classList.add('is-hidden'); }
@@ -214,7 +248,7 @@
     root.querySelector('#settledBillImport')?.addEventListener('click', () => openBillImport('settled'));
     root.querySelector('#orderExportButton')?.addEventListener('click', () => { exportOrderData().catch(error => window.alert(error.message)); });
     root.querySelector('#orderDateCorrectionButton')?.addEventListener('click', openDateCorrection);
-    root.onclick = event => { const order = orders.find(item => item.id === event.target.dataset.orderDetail); const settlement = settlements.find(item => item.id === event.target.dataset.settlementDetail); if (order) openOrder(order); if (settlement) openSettlement(settlement); };
+    root.onclick = event => { const order = orders.find(item => item.id === event.target.dataset.orderDetail); const settlement = settlements.find(item => item.id === event.target.dataset.settlementDetail); if (order) showOrderDetail(order); if (settlement) showSettlementDetail(settlement); };
     load().then(bind).catch(error => { const target = currentTab === 'orders' ? document.querySelector('#adminOrderRows') : document.querySelector('#adminSettlementRows'); target.innerHTML = `<tr><td colspan="13" class="admin-empty">${error.message}</td></tr>`; });
   }
   document.addEventListener('admin:navigate', event => { if (event.detail.page === 'orders') render('orders'); else root.classList.remove('order-management-active'); });

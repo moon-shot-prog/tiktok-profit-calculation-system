@@ -11,16 +11,14 @@
     "sync:watch": "node scripts/local-sync-assistant.js --watch",
     "tiktok:setup": "node scripts/tiktok-download-runner.js --setup",
     "tiktok:check": "node scripts/tiktok-download-runner.js --check",
-    "tiktok:serve": "node scripts/tiktok-download-runner.js --serve"
+    "tiktok:serve": "node scripts/tiktok-download-runner.js --serve",
+    "tiktok:daily": "node scripts/tiktok-daily-job.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.116.0",
-    "exceljs": "4.4.0"
-  },
-  "devDependencies": {
-    "supabase": "2.107.0"
+    "exceljs": "4.4.0",
+    "pg": "8.16.3"
   }
 }

@@ -62,8 +62,9 @@
     const data = event.detail || {};
     // 退款趋势复用首页聚合已读取的订单，避免首屏再次扫描同一时间段的订单与 SKU 明细。
     if (Array.isArray(data.refundSeries)) {
+      const selectedStore = data.profitReport?.stores?.[0];
       const shopLabel = dashboardShopId
-        ? (card.querySelector('#refundTrendShop').selectedOptions[0]?.textContent || '已选店铺')
+        ? (selectedStore?.shop || selectedStore?.shopName || selectedStore?.shopCode || '已选店铺')
         : '全部已授权店铺';
       render(data.refundSeries, shopLabel);
       return;

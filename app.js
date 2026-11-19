@@ -6,6 +6,9 @@ const password = document.querySelector('#password');
 const formMessage = document.querySelector('#formMessage');
 const accountFormat = document.querySelector('#accountFormat');
 const rememberMe = document.querySelector('#rememberMe');
+const rememberPassword = document.querySelector('#rememberPassword');
+const loginForm = document.querySelector('#loginForm');
+const REMEMBER_PASSWORD_PREFERENCE_KEY = 'tiktokShopRememberPasswordPreference';
 const initializeArea = document.querySelector('#initializeArea');
 const dialog = document.querySelector('#authDialog');
 const dialogForm = document.querySelector('#dialogForm');
@@ -17,12 +20,21 @@ const dialogPasswordConfirm = document.querySelector('#dialogPasswordConfirm');
 const dialogSubmit = document.querySelector('#dialogSubmit');
 const dialogMessage = document.querySelector('#dialogMessage');
 const AUTH_SESSION_KEY = 'tiktokShopAuthSession';
-const AUTH_INACTIVITY_TIMEOUT = 8 * 60 * 60 * 1000;
+// A remembered login is also used by the dedicated Sync Assistant browser.
+// Keep that local session usable for the same 30-day period as its server
+// authorisation; users can still sign out explicitly at any time.
+const AUTH_INACTIVITY_TIMEOUT = 30 * 24 * 60 * 60 * 1000;
 const AUTH_REFRESH_LEEWAY = 5 * 60 * 1000;
 const AUTH_ACTIVE_REFRESH_WINDOW = 15 * 60 * 1000;
 const nativeFetch = window.fetch.bind(window);
 let dialogMode = '';
 let recoveryAccessToken = '';
+rememberPassword.checked = localStorage.getItem(REMEMBER_PASSWORD_PREFERENCE_KEY) === 'true';
+rememberPassword.addEventListener('change', () => localStorage.setItem(REMEMBER_PASSWORD_PREFERENCE_KEY, String(rememberPassword.checked)));
+async function savePasswordToBrowser() {
+  if (!rememberPassword.checked || !window.PasswordCredential || !navigator.credentials?.store) return;
+  try { await navigator.credentials.store(new PasswordCredential(loginForm)); } catch { /* 浏览器策略不允许时由其自身密码提示接管。 */ }
+}
 let currentWorkspaceRole = '';
 let sessionRefreshTimer = null;
 
@@ -100,7 +112,7 @@ function scheduleSessionRefresh(session = readAuthSession()) {
     const current = readAuthSession();
     if (!current || sessionIsInactive(current)) return showSessionExpired('超过 8 小时未操作，登录状态已失效，请重新登录');
     // Only renew while the person is actively using the system. Otherwise an
-    // automatic refresh would keep the Supabase session alive during idle time.
+// Automatic refresh is disabled while the page is idle.
     if (Date.now() - Number(current.lastActivityAt || 0) > AUTH_ACTIVE_REFRESH_WINDOW) return;
     try { await refreshAuthSession(); }
     catch { if (Number(current.expiresAt || 0) * 1000 <= Date.now()) showSessionExpired(); }
@@ -173,6 +185,7 @@ async function login() {
   formMessage.textContent = '正在安全登录…';
   try {
     const result = await requestJson('/api/auth/login', { identity, password: password.value });
+    await savePasswordToBrowser();
     storeAuthSession({ ...result.session, primaryRole: result.primaryRole, user: result.user });
     document.dispatchEvent(new CustomEvent('business:promotion-cache-reset'));
     enterWorkspace(result.primaryRole, result.user);
@@ -214,7 +227,7 @@ document.querySelector('#togglePassword').addEventListener('click', event => {
   const revealed = password.type === 'text'; password.type = revealed ? 'password' : 'text';
   event.currentTarget.textContent = revealed ? '显示' : '隐藏'; event.currentTarget.setAttribute('aria-label', revealed ? '显示密码' : '隐藏密码');
 });
-document.querySelector('#loginButton').addEventListener('click', login);
+loginForm.addEventListener('submit', event => { event.preventDefault(); login(); });
 document.querySelector('#initializeButton').addEventListener('click', () => window.alert('管理员已初始化；该入口已关闭。'));
 document.querySelector('#forgotPassword').addEventListener('click', () => openDialog('reset'));
 document.querySelector('#closeAuthDialog').addEventListener('click', () => { recoveryAccessToken = ''; dialog.close(); });
@@ -244,7 +257,7 @@ dialogForm.addEventListener('submit', async event => {
     dialogMessage.textContent = error.message;
   } finally { dialogSubmit.disabled = false; }
 });
-document.querySelector('#inviteMember')?.addEventListener('click', () => window.alert('成员邀请将在管理后台接入 Supabase 后开放。当前请勿使用原型邀请链接。'));
+document.querySelector('#inviteMember')?.addEventListener('click', () => window.alert('成员邀请将在管理后台开放。当前请勿使用原型邀请链接。'));
 document.querySelectorAll('.logout').forEach(button => button.addEventListener('click', () => {
   clearAuthSession();
   document.dispatchEvent(new CustomEvent('business:promotion-cache-reset'));
