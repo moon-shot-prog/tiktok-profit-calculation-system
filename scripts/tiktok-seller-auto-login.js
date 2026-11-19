@@ -60,7 +60,15 @@ async function openBrowser(chromium, profilePath, profileKey) {
       return { browser: await chromium.connectOverCDP(`http://127.0.0.1:${port}`), chrome: null, reused: true };
     }
   } catch (_) { /* No reusable session is listening yet. */ }
-  const chrome = spawn(chromePath(), [`--user-data-dir=${profilePath}`, `--remote-debugging-port=${port}`, '--remote-allow-origins=*', '--no-first-run', '--disable-popup-blocking', 'about:blank'], { windowsHide: false });
+  // The login helper exits as soon as authentication is ready.  On Windows a
+  // non-detached child Chrome can be torn down with that helper, leaving the
+  // following order job attached to a closed page.  Keep the browser in its
+  // own process group for the orchestrated reuse path; the runner closes it
+  // explicitly after Orders -> Bills -> Promotions have all completed.
+  const chrome = spawn(chromePath(), [`--user-data-dir=${profilePath}`, `--remote-debugging-port=${port}`, '--remote-allow-origins=*', '--no-first-run', '--disable-popup-blocking', 'about:blank'], {
+    windowsHide: false,
+    detached: process.argv.includes('--keep-session')
+  });
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try { if ((await fetch(`http://127.0.0.1:${port}/json/version`)).ok) return { browser: await chromium.connectOverCDP(`http://127.0.0.1:${port}`), chrome, reused: false }; } catch (_) { /* Chrome is starting. */ }
     await sleep(1000);
