@@ -141,15 +141,13 @@ function atContinueTarget(page, continueUrl) {
   } catch (_) { return false; }
 }
 async function completeLogin(native, result) {
-  // A range runner waits synchronously for this script.  Closing only the CDP
-  // connection leaves the Chrome child alive, which keeps Node alive too and
-  // makes the runner appear stuck at “正在检查登录”.  Persisted login state is
-  // already written by this point, so the following download job can launch a
-  // clean browser profile immediately.
-  // `openBrowser` returns the spawned child as `chrome` (not `process`).
-  // Bound the CDP close as a defensive measure: a remote browser may take a
-  // while to detach, but that must never hold up the synchronous range runner.
-  try { await Promise.race([native.browser.close(), sleep(1500)]); } catch (_) { /* no-op */ }
+  // Do not await browser.close() here.  In a CDP-attached browser it can wait
+  // indefinitely for a remote "disconnected" notification.  Promise.race
+  // only stops waiting; it does not cancel the underlying socket, leaving the
+  // one-shot login process alive and the runner stuck at “检查登录”.
+  // Closing the Playwright connection itself is immediate and deliberately
+  // leaves Chrome running for the next Order -> Bills -> Promotion step.
+  try { native.browser._connection.close(); } catch (_) { /* no-op */ }
   // The orchestrators pass --keep-session.  Closing the CDP connection above
   // releases this child process while Chrome stays open for the immediately
   // following order, settled-bill, unsettled-bill and promotion steps.
