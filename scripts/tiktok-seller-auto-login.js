@@ -126,11 +126,26 @@ async function fillAndSubmit(page, value) {
   const submit = await firstVisible(page.getByRole('button', { name: /log\s*in|sign\s*in|登录|continue|继续/i }));
   if (submit) await submit.click({ force: true }); else await password.press('Enter');
 }
+async function navigateForLogin(page, targetUrl) {
+  // Seller Center can render the Orders shell while never firing
+  // domcontentloaded (long-lived analytics and recovery requests keep its
+  // navigation pending).  Login only needs to reach the module; the download
+  // job owns the subsequent full page wait and filtering.
+  let navigationError = null;
+  let finished = false;
+  const navigation = page.goto(targetUrl, { waitUntil: 'commit', timeout: 15000 })
+    .then(() => { finished = true; })
+    .catch(error => { navigationError = error; });
+  await Promise.race([navigation, sleep(15000)]);
+  if (!finished && !atContinueTarget(page, targetUrl)) {
+    throw navigationError || new Error(`登录后未能进入下载模块：${targetUrl}`);
+  }
+}
 async function openContinueTarget(page, continueUrl) {
   if (!continueUrl) return;
   const expected = new URL(continueUrl);
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await page.goto(continueUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await navigateForLogin(page, continueUrl);
     await page.waitForTimeout(1200 * attempt);
     await settleSellerPopups(page, 1500);
     const current = new URL(page.url());
@@ -182,7 +197,7 @@ async function main() {
   await page.bringToFront().catch(() => {});
   // A sync run supplies its target module URL.  Go there directly so the
   // first visible page is Orders/Bills/Ads rather than the Seller Center home.
-  await page.goto(continueUrl || config.sellerCenterUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await navigateForLogin(page, continueUrl || config.sellerCenterUrl);
   await page.waitForTimeout(2500);
   await settleSellerPopups(page, 5000);
   let text = await page.locator('body').innerText().catch(() => '');
