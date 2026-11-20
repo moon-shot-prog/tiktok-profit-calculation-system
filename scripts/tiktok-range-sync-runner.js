@@ -81,7 +81,12 @@ function main() {
       const args = [jobs[type], '--store', store.profileKey, '--start-date', range.start, '--end-date', range.end]; if (type === 'settledBills') args.push('--source', 'settled');
       const task = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGTERM' });
       delete store.currentStage;
-      if (task.status === 0) { result.status = 'completed'; result.exportCount = 1; }
+      const taskOutput = String(task.stdout || '');
+      if (task.status === 0 && /已完成过 .* 自动导入，跳过重复任务/.test(taskOutput)) {
+        result.status = 'skipped'; result.exportCount = 0;
+        result.message = '该店铺此日期范围已成功导入，已跳过重复下载。';
+      }
+      else if (task.status === 0) { result.status = 'completed'; result.exportCount = 1; }
       else { result.status = 'failed'; result.error = stageFailure(task, STAGE_LABEL[type], timeoutMs); store.status = 'failed'; store.error = `${STAGE_LABEL[type]}范围导出失败：${result.error}`; }
       writeState(statePath, state);
     }

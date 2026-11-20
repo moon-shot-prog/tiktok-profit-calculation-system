@@ -410,7 +410,13 @@ async function main() {
     }
     if (!confirmButton) throw new Error('未找到 CSV 导出确认按钮');
     const exportMarker = exportTimeMarker();
-    await confirmButton.click({ force: true });
+    // Some Seller Center dialogs are rendered beneath a fixed viewport layer.
+    // Ensure the actual modal button is in view, then use DOM click only as a
+    // fallback; otherwise Playwright reports “outside of the viewport” and no
+    // export task is created.
+    await confirmButton.scrollIntoViewIfNeeded().catch(() => {});
+    try { await confirmButton.click({ force: true, timeout: 10000 }); }
+    catch (_) { await confirmButton.evaluate(node => node.click()); }
     // The marker is captured before the request: a later history entry cannot
     // cause the downloader to fall back to an earlier exported report.
     const { download: downloadButton } = await waitForThisExportDownload(page, exportMarker);
