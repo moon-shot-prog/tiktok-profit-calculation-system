@@ -165,6 +165,24 @@ async function chooseFilteredOrderExportScope(page, expectedOrderCount) {
   }
   throw new Error(`导出窗口未找到与页面筛选结果一致的订单范围（页面：${expectedOrderCount} 单）。已停止下载，避免导入不完整文件。`);
 }
+async function chooseCsvExportFormat(page) {
+  // The export dialog re-renders once the scope option is selected.  Never
+  // retain the original CSV locator across that transition.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const choices = page.getByText('CSV', { exact: true });
+    for (let index = 0; index < await choices.count(); index += 1) {
+      const choice = choices.nth(index);
+      if (!await choice.isVisible().catch(() => false)) continue;
+      try {
+        await choice.scrollIntoViewIfNeeded().catch(() => {});
+        await choice.click({ force: true, timeout: 5000 });
+        return;
+      } catch (_) { /* obtain a fresh locator after the dialog redraws */ }
+    }
+    await sleep(350 * (attempt + 1));
+  }
+  throw new Error('导出窗口中的 CSV 格式选项持续重载，未创建下载任务。');
+}
 
 function readRunLog(rootDir) {
   const filePath = path.join(rootDir, '待处理', '自动任务记录.json');
@@ -400,8 +418,7 @@ async function main() {
     await exportButton.click();
     await page.waitForTimeout(800);
     await chooseFilteredOrderExportScope(page, orderCount);
-    const csv = page.getByText('CSV', { exact: true });
-    if (await csv.count()) await csv.click({ force: true });
+    await chooseCsvExportFormat(page);
     // The entry button and confirmation button share the text “导出”.  The
     // confirmation button, however, has a stable analytics marker.  Prefer
     // that marker so a re-rendered/hidden entry button cannot make the whole
