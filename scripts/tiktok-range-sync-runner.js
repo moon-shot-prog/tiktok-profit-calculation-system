@@ -78,7 +78,10 @@ function main() {
       const timeoutMs = STAGE_TIMEOUT_MS[type];
       store.currentStage = { type, label: STAGE_LABEL[type], startedAt: new Date().toISOString(), timeoutAt: new Date(Date.now() + timeoutMs).toISOString(), range: `${range.start} 至 ${range.end}` };
       state.message = `正在同步${STAGE_LABEL[type]}：${store.store} · ${range.start} 至 ${range.end}（最长 ${Math.round(timeoutMs / 60000)} 分钟）`; writeState(statePath, state);
-      const args = [jobs[type], '--store', store.profileKey, '--start-date', range.start, '--end-date', range.end]; if (type === 'settledBills') args.push('--source', 'settled');
+      // A date-range run is an operator-requested reconciliation.  It must
+      // download and import again even if a prior run for the same interval
+      // succeeded; import APIs remain idempotent and update changed rows.
+      const args = [jobs[type], '--store', store.profileKey, '--start-date', range.start, '--end-date', range.end, '--force']; if (type === 'settledBills') args.push('--source', 'settled');
       const task = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGTERM' });
       delete store.currentStage;
       const taskOutput = String(task.stdout || '');

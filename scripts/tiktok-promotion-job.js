@@ -218,12 +218,13 @@ async function main() {
   const targetDate = rangeStart || arg('--date') || utcYesterday();
   const endDate = rangeEnd || targetDate;
   const dryRun = process.argv.includes('--dry-run');
+  const force = process.argv.includes('--force');
   const mapping = (config.shopMappings || []).find(item => (item.profileKey || 'default') === key);
   if (!mapping) throw new Error('未找到指定店铺的本机自动化配置');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || endDate < targetDate) throw new Error('日期范围格式必须为 YYYY-MM-DD，且开始日期不能晚于结束日期');
   const { filePath: logPath, data: runLog } = readRunLog(config.rootDir);
   const runKey = `${targetDate}~${endDate}|${key}`;
-  if (!dryRun && runLog.runs?.some(run => run.key === runKey && run.status === 'imported')) { console.log(`已完成过 ${targetDate} 至 ${endDate} 的推广费导入，跳过重复任务。`); return; }
+  if (!dryRun && !force && runLog.runs?.some(run => run.key === runKey && run.status === 'imported')) { console.log(`已完成过 ${targetDate} 至 ${endDate} 的推广费导入，跳过重复任务。`); return; }
   const record = { key: runKey, date: targetDate, endDate, store: mapping.sellerCenterName, status: 'running', startedAt: new Date().toISOString() };
   const profilePath = key === 'default' ? path.join(config.rootDir, '浏览器配置', 'TikTokShop下载助手') : path.join(config.rootDir, '浏览器配置', `TikTokShop下载助手-${key}`);
   const { chromium } = require(playwrightPath);

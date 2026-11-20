@@ -636,6 +636,7 @@ async function main() {
   const targetDate = rangeStart || arg('--date') || shopYesterday();
   const endDate = rangeEnd || targetDate;
   const dryRun = process.argv.includes('--dry-run');
+  const force = process.argv.includes('--force');
   const inspectHistory = process.argv.includes('--inspect-history');
   const inspectDownload = process.argv.includes('--inspect-download');
   const inspectPage = process.argv.includes('--inspect-page');
@@ -649,7 +650,7 @@ async function main() {
   const profilePath = key === 'default' ? path.join(config.rootDir, '浏览器配置', 'TikTokShop下载助手') : path.join(config.rootDir, '浏览器配置', `TikTokShop下载助手-${key}`);
   const { filePath: logPath, data: runLog } = readLog(config.rootDir, sourceType);
   const runKey = `${targetDate}~${endDate}|${key}`;
-  if (!dryRun && runLog.runs?.some(run => run.key === runKey && run.status === 'imported')) { console.log(`已完成过 ${targetDate} 至 ${endDate} 的${billLabel(sourceType)}导入，跳过重复任务。`); return; }
+  if (!dryRun && !force && runLog.runs?.some(run => run.key === runKey && run.status === 'imported')) { console.log(`已完成过 ${targetDate} 至 ${endDate} 的${billLabel(sourceType)}导入，跳过重复任务。`); return; }
   const record = { key: runKey, date: targetDate, endDate, store: mapping.sellerCenterName, status: 'running', startedAt: new Date().toISOString() };
   const { chromium } = require(playwrightPath);
   const native = await openBrowser(chromium, profilePath, key);
