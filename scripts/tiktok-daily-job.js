@@ -402,11 +402,24 @@ async function main() {
     await chooseFilteredOrderExportScope(page, orderCount);
     const csv = page.getByText('CSV', { exact: true });
     if (await csv.count()) await csv.click({ force: true });
-    const buttons = page.getByRole('button', { name: '导出', exact: true });
+    // The entry button and confirmation button share the text “导出”.  The
+    // confirmation button, however, has a stable analytics marker.  Prefer
+    // that marker so a re-rendered/hidden entry button cannot make the whole
+    // range run fail while checking its bounding box.
+    const markedButtons = page.locator('button[data-log_click_for="export"]');
     let confirmButton = null;
-    for (let index = 0; index < await buttons.count(); index += 1) {
-      const candidate = buttons.nth(index); const box = await candidate.boundingBox();
-      if (box && box.width > 200 && box.y > 200) { confirmButton = candidate; break; }
+    for (let index = 0; index < await markedButtons.count(); index += 1) {
+      const candidate = markedButtons.nth(index);
+      if (await candidate.isVisible().catch(() => false) && !await candidate.isDisabled().catch(() => true)) { confirmButton = candidate; break; }
+    }
+    if (!confirmButton) {
+      const buttons = page.getByRole('button', { name: '导出', exact: true });
+      for (let index = 0; index < await buttons.count(); index += 1) {
+        const candidate = buttons.nth(index);
+        if (!await candidate.isVisible().catch(() => false) || await candidate.isDisabled().catch(() => true)) continue;
+        const size = await candidate.evaluate(node => ({ width: node.getBoundingClientRect().width, top: node.getBoundingClientRect().top }), { timeout: 1500 }).catch(() => null);
+        if (size && size.width > 200 && size.top > 100) { confirmButton = candidate; break; }
+      }
     }
     if (!confirmButton) throw new Error('未找到 CSV 导出确认按钮');
     const exportMarker = exportTimeMarker();
