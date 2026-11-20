@@ -473,20 +473,42 @@ function downloadSnapshot(directory) {
   } catch (_) { /* directory is created by the caller */ }
   return snapshot;
 }
-async function waitForBrowserDownload(directory, before, timeoutMs) {
+function browserDownloadDirectories(primaryDirectory) {
+  const directories = [primaryDirectory];
+  // If a running Chrome instance rejects CDP download behavior, Chromium uses
+  // its profile default, normally the Windows Downloads folder.  Watch it as
+  // a secondary source and move only the new, stable file into our staging
+  // area before import.
+  if (process.env.USERPROFILE) directories.push(path.join(process.env.USERPROFILE, 'Downloads'));
+  return [...new Set(directories.map(item => path.resolve(item)))].filter(directory => fs.existsSync(directory));
+}
+function downloadSnapshots(directories) {
+  const snapshot = new Set();
+  for (const directory of directories) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = path.join(directory, entry.name); const stat = fs.statSync(file);
+      snapshot.add(`${file}|${stat.size}|${stat.mtimeMs}`);
+    }
+  }
+  return snapshot;
+}
+async function waitForBrowserDownload(directories, before, timeoutMs) {
   const until = Date.now() + timeoutMs;
   const observed = new Map();
   while (Date.now() < until) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isFile() || /\.(crdownload|tmp)$/i.test(entry.name)) continue;
-      const file = path.join(directory, entry.name);
-      const stat = fs.statSync(file);
-      if (stat.size <= 0 || before.has(`${entry.name}|${stat.size}|${stat.mtimeMs}`)) continue;
-      // A response acknowledgement can precede Chromium flushing the file.
-      // Accept it only after the size has remained unchanged for two polls.
-      const prior = observed.get(file);
-      if (prior && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs && Date.now() - prior.firstSeenAt >= 900) return file;
-      observed.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, firstSeenAt: prior?.firstSeenAt || Date.now() });
+    for (const directory of directories) {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isFile() || /\.(crdownload|tmp)$/i.test(entry.name)) continue;
+        const file = path.join(directory, entry.name);
+        const stat = fs.statSync(file);
+        if (stat.size <= 0 || before.has(`${file}|${stat.size}|${stat.mtimeMs}`)) continue;
+        // A response acknowledgement can precede Chromium flushing the file.
+        // Accept it only after the size has remained unchanged for two polls.
+        const prior = observed.get(file);
+        if (prior && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs && Date.now() - prior.firstSeenAt >= 900) return file;
+        observed.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, firstSeenAt: prior?.firstSeenAt || Date.now() });
+      }
     }
     await sleep(500);
   }
@@ -526,7 +548,8 @@ async function downloadFile(page, downloadsPath, report) {
       // Attached Chrome profiles do not always emit Playwright's `download`
       // event. Force Chromium to write to the assistant staging folder and
       // use that physical file as an additional, authoritative signal.
-      const before = downloadSnapshot(downloadsPath);
+      const downloadDirectories = browserDownloadDirectories(downloadsPath);
+      const before = downloadSnapshots(downloadDirectories);
       const cdp = await page.context().newCDPSession(page).catch(() => null);
       if (cdp) {
         await cdp.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadsPath }).catch(() => {});
@@ -543,12 +566,16 @@ async function downloadFile(page, downloadsPath, report) {
           || /(?:settlement|bill|income).*(?:download|file)|(?:download|file).*(?:settlement|bill|income)/i.test(url);
       }, { timeout: REPORT_DOWNLOAD_WAIT_MS })
         .then(response => ({ type: 'response', response })).catch(() => null);
-      const localFilePromise = waitForBrowserDownload(downloadsPath, before, REPORT_DOWNLOAD_WAIT_MS)
+      const localFilePromise = waitForBrowserDownload(downloadDirectories, before, REPORT_DOWNLOAD_WAIT_MS)
         .then(filePath => filePath ? ({ type: 'local_file', filePath }) : null);
+      const playwrightDownloadPromise = page.waitForEvent('download', { timeout: REPORT_DOWNLOAD_WAIT_MS })
+        .then(download => ({ type: 'playwright_download', download })).catch(() => null);
       await clickReportDownload(page, report);
-      const result = await Promise.race([responsePromise, localFilePromise, new Promise(resolve => setTimeout(() => resolve(null), REPORT_DOWNLOAD_WAIT_MS))]);
+      const result = await Promise.race([responsePromise, localFilePromise, playwrightDownloadPromise, new Promise(resolve => setTimeout(() => resolve(null), REPORT_DOWNLOAD_WAIT_MS))]);
       if (result?.type === 'local_file') {
         if (path.resolve(result.filePath) !== path.resolve(targetPath)) fs.renameSync(result.filePath, targetPath);
+      } else if (result?.type === 'playwright_download') {
+        await result.download.saveAs(targetPath);
       } else if (result?.type === 'response') {
         const endpointResponse = result.response;
         const disposition = String(endpointResponse.headers()['content-disposition'] || '');

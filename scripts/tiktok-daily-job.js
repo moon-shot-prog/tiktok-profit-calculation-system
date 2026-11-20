@@ -145,6 +145,26 @@ function verifyExportOrderCount(rows, expectedOrderCount) {
   }
   return exportedOrderCount;
 }
+async function chooseFilteredOrderExportScope(page, expectedOrderCount) {
+  // TikTok localizes this line and sometimes formats the count as 20,349 or
+  // renders the number in its own span.  The old exact Chinese sentence made
+  // a valid export fail before downloading.  Match the visible option by its
+  // semantic text and normalized count, then click its selectable ancestor.
+  const candidates = page.getByText(/筛选.*订单|filtered.*orders/i, { exact: false });
+  for (let index = 0; index < await candidates.count(); index += 1) {
+    const candidate = candidates.nth(index);
+    if (!await candidate.isVisible().catch(() => false)) continue;
+    const text = (await candidate.innerText().catch(() => '')).trim();
+    if (!text || text.length > 180) continue;
+    const counts = (text.match(/\d[\d,\s]*/g) || []).map(value => Number(value.replace(/[,\s]/g, ''))).filter(Number.isFinite);
+    if (!counts.includes(Number(expectedOrderCount))) continue;
+    const target = candidate.locator('xpath=ancestor-or-self::*[self::label or @role="radio" or @role="button" or self::button][1]');
+    if (await target.count() && await target.first().isVisible().catch(() => false)) await target.first().click({ force: true });
+    else await candidate.click({ force: true });
+    return;
+  }
+  throw new Error(`导出窗口未找到与页面筛选结果一致的订单范围（页面：${expectedOrderCount} 单）。已停止下载，避免导入不完整文件。`);
+}
 
 function readRunLog(rootDir) {
   const filePath = path.join(rootDir, '待处理', '自动任务记录.json');
@@ -379,10 +399,7 @@ async function main() {
     const exportButton = page.getByRole('button', { name: '导出', exact: true });
     await exportButton.click();
     await page.waitForTimeout(800);
-    const dialogText = await page.locator('body').innerText();
-    const scope = page.getByText(`筛选出的订单 (${orderCount} 笔订单)`, { exact: true });
-    if (!await scope.count()) throw new Error('导出窗口中的订单数量与筛选结果不一致');
-    await scope.click({ force: true });
+    await chooseFilteredOrderExportScope(page, orderCount);
     const csv = page.getByText('CSV', { exact: true });
     if (await csv.count()) await csv.click({ force: true });
     const buttons = page.getByRole('button', { name: '导出', exact: true });
