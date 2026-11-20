@@ -166,19 +166,22 @@ async function chooseFilteredOrderExportScope(page, expectedOrderCount) {
   throw new Error(`导出窗口未找到与页面筛选结果一致的订单范围（页面：${expectedOrderCount} 单）。已停止下载，避免导入不完整文件。`);
 }
 async function chooseCsvExportFormat(page) {
-  // The export dialog re-renders once the scope option is selected.  Never
-  // retain the original CSV locator across that transition.
+  // The export dialog re-renders once the scope option is selected. Trigger
+  // the currently mounted option in the document instead of retaining a
+  // Playwright locator which may point at the just-destroyed option node.
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const choices = page.getByText('CSV', { exact: true });
-    for (let index = 0; index < await choices.count(); index += 1) {
-      const choice = choices.nth(index);
-      if (!await choice.isVisible().catch(() => false)) continue;
-      try {
-        await choice.scrollIntoViewIfNeeded().catch(() => {});
-        await choice.click({ force: true, timeout: 5000 });
-        return;
-      } catch (_) { /* obtain a fresh locator after the dialog redraws */ }
-    }
+    const clicked = await page.evaluate(() => {
+      const visible = node => !!(node && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+      const option = [...document.querySelectorAll('div, span, label, button')]
+        .find(node => visible(node) && (node.textContent || '').trim() === 'CSV');
+      if (!option) return false;
+      const target = option.closest('[role="radio"], label, button, .p-oft') || option;
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      target.click();
+      return true;
+    }).catch(() => false);
+    if (clicked) return;
     await sleep(350 * (attempt + 1));
   }
   throw new Error('导出窗口中的 CSV 格式选项持续重载，未创建下载任务。');
@@ -192,6 +195,16 @@ async function confirmOrderExport(page) {
     'button.p-btn-primary:visible:not([disabled])'
   ];
   for (let attempt = 0; attempt < 5; attempt += 1) {
+    const domClicked = await page.evaluate(() => {
+      const visible = node => !!(node && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden' && !node.disabled);
+      const button = [...document.querySelectorAll('button[data-log_click_for="export"], button.p-btn-primary')]
+        .filter(node => visible(node) && (node.textContent || '').trim() === '导出')
+        .pop();
+      if (!button) return false;
+      button.click();
+      return true;
+    }).catch(() => false);
+    if (domClicked) return;
     for (const selector of selectors) {
       const buttons = page.locator(selector).filter({ hasText: /^导出$/ });
       const count = await buttons.count().catch(() => 0);
