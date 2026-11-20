@@ -163,6 +163,8 @@ function main() {
       store.completedAt = new Date().toISOString();
       updateStoreStatus(store);
       writeState(statePath, state);
+      closeStoreSession(store.profileKey || 'default');
+      sessionKeys.delete(store.profileKey || 'default');
       continue;
     }
     state.message = `${checkOnly ? '正在检测' : '正在同步'}：${store.store}`;
@@ -196,6 +198,13 @@ function main() {
     store.completedAt = new Date().toISOString();
     updateStoreStatus(store);
     writeState(statePath, state);
+    // The normal path is now complete for this store.  Do not leave its
+    // dedicated Chrome window open while later stores download.  A store with
+    // a queued bill retry stays open until that retry finishes below.
+    if (!billRetryQueue.some(item => item.store === store)) {
+      closeStoreSession(store.profileKey || 'default');
+      sessionKeys.delete(store.profileKey || 'default');
+    }
   }
     // 首轮已按店铺和任务完整执行。现在仅重试失败的账单，不会重复已成功的订单或推广任务。
     if (billRetryQueue.length) {
@@ -208,6 +217,8 @@ function main() {
         updateStoreStatus(retry.store);
         retry.store.completedAt = new Date().toISOString();
         writeState(statePath, state);
+        closeStoreSession(retry.store.profileKey || 'default');
+        sessionKeys.delete(retry.store.profileKey || 'default');
       }
     }
     let failures = 0;

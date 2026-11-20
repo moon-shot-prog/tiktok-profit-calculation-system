@@ -55,7 +55,11 @@ function main() {
     sessionKeys.add(store.profileKey || 'default');
     const login = runStoreLogin(config, store, firstType);
     store.login = { status: login.status === 0 ? 'completed' : 'failed', error: login.status === 0 ? null : String(login.stderr || login.stdout || '自动登录失败').trim() };
-    if (login.status !== 0) { store.status = 'failed'; store.error = store.login.error; failures += 1; writeState(statePath, state); continue; }
+    if (login.status !== 0) {
+      store.status = 'failed'; store.error = store.login.error; failures += 1; writeState(statePath, state);
+      closeStoreSession(store.profileKey || 'default'); sessionKeys.delete(store.profileKey || 'default');
+      continue;
+    }
     for (const [type, range] of Object.entries(ranges)) {
       // The UI reads this state while the child process is running.  Do not
       // pre-mark it completed, otherwise the user sees “已完成” while the
@@ -72,6 +76,7 @@ function main() {
     }
     if (store.status !== 'failed') store.status = 'completed'; else failures += 1;
     store.completedAt = new Date().toISOString(); writeState(statePath, state);
+    closeStoreSession(store.profileKey || 'default'); sessionKeys.delete(store.profileKey || 'default');
   }
   state.completedAt = new Date().toISOString(); if (state.status !== 'cancelled') state.status = failures ? 'completed_with_errors' : 'completed'; state.message = state.status === 'cancelled' ? '范围同步已取消。' : (failures ? `范围同步完成：${stores.length - failures} 家通过，${failures} 家需要处理。` : `范围同步完成：${stores.length} 家店铺均通过。`); writeState(statePath, state); if (failures) process.exitCode = 1;
   } finally { for (const profileKey of sessionKeys) closeStoreSession(profileKey); try { fs.unlinkSync(activeLock); } catch (_) {} }
