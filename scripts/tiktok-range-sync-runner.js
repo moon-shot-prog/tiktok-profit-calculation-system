@@ -8,6 +8,8 @@ const configPath = path.join(dir, 'tiktok-automation.config.json');
 const loginPath = path.join(dir, 'tiktok-seller-auto-login.js');
 const closeSessionPath = path.join(dir, 'tiktok-browser-session-close.js');
 const jobs = { orders: path.join(dir, 'tiktok-daily-job.js'), settledBills: path.join(dir, 'tiktok-unsettled-bill-job.js'), unsettledBills: path.join(dir, 'tiktok-unsettled-bill-job.js'), promotions: path.join(dir, 'tiktok-promotion-job.js') };
+const STAGE_TIMEOUT_MS = { orders: 12 * 60 * 1000, settledBills: 20 * 60 * 1000, unsettledBills: 20 * 60 * 1000, promotions: 12 * 60 * 1000 };
+const STAGE_LABEL = { orders: '订单', settledBills: '已结算账单', unsettledBills: '未结算账单', promotions: '推广' };
 function initialTargetUrl(config, store, type) {
   const base = String(config.sellerCenterUrl).replace(/\/$/, '');
   if (type === 'settledBills' || type === 'unsettledBills') return `${base}/finance/bills?subTab=bills&tab=statements`;
@@ -29,6 +31,10 @@ function closeStoreSession(profileKey) { spawnSync(process.execPath, [closeSessi
 function read(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; } }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8'); }
 function writeState(file, value) { value.pid = process.pid; value.heartbeatAt = new Date().toISOString(); write(file, value); }
+function stageFailure(result, label, timeoutMs) {
+  if (result?.error?.code === 'ETIMEDOUT' || result?.signal) return `${label}超过 ${Math.round(timeoutMs / 60000)} 分钟仍未完成，已停止该步骤并将关闭专用浏览器。`;
+  return String(result?.stderr || result?.stdout || `${label}任务失败`).trim().slice(0, 500);
+}
 function lockPath(rootDir) { return path.join(rootDir, '待处理', '同步助手运行锁.json'); }
 function acquireLock(rootDir) {
   const file = lockPath(rootDir); const current = read(file, null); const started = Date.parse(current?.startedAt || '');
@@ -50,10 +56,12 @@ function main() {
   writeState(statePath, state); let failures = 0; const sessionKeys = new Set();
   try { for (const store of state.stores) {
     if (cancelled(config.rootDir)) { state.status = 'cancelled'; state.message = '已收到取消请求，未启动后续店铺。'; break; }
-    store.status = 'running'; state.message = `正在检查登录：${store.store}`; writeState(statePath, state);
+    store.status = 'running'; store.currentStage = { type: 'login', label: '登录检查', startedAt: new Date().toISOString(), manualVerification: true };
+    state.message = `正在检查登录：${store.store}（如出现验证码，请完成验证后保持页面打开）`; writeState(statePath, state);
     const firstType = Object.keys(ranges)[0];
     sessionKeys.add(store.profileKey || 'default');
     const login = runStoreLogin(config, store, firstType);
+    delete store.currentStage;
     store.login = { status: login.status === 0 ? 'completed' : 'failed', error: login.status === 0 ? null : String(login.stderr || login.stdout || '自动登录失败').trim() };
     if (login.status !== 0) {
       store.status = 'failed'; store.error = store.login.error; failures += 1; writeState(statePath, state);
@@ -67,11 +75,14 @@ function main() {
       const result = { status: 'running', range: `${range.start} 至 ${range.end}`, exportCount: 0, error: null };
       store[type] = result;
       if (cancelled(config.rootDir)) { state.status = 'cancelled'; state.message = '已收到取消请求，未启动后续数据类型。'; break; }
-      state.message = `正在同步${type}：${store.store} · ${range.start} 至 ${range.end}`; writeState(statePath, state);
+      const timeoutMs = STAGE_TIMEOUT_MS[type];
+      store.currentStage = { type, label: STAGE_LABEL[type], startedAt: new Date().toISOString(), timeoutAt: new Date(Date.now() + timeoutMs).toISOString(), range: `${range.start} 至 ${range.end}` };
+      state.message = `正在同步${STAGE_LABEL[type]}：${store.store} · ${range.start} 至 ${range.end}（最长 ${Math.round(timeoutMs / 60000)} 分钟）`; writeState(statePath, state);
       const args = [jobs[type], '--store', store.profileKey, '--start-date', range.start, '--end-date', range.end]; if (type === 'settledBills') args.push('--source', 'settled');
-      const task = spawnSync(process.execPath, args, { encoding: 'utf8' });
+      const task = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGTERM' });
+      delete store.currentStage;
       if (task.status === 0) { result.status = 'completed'; result.exportCount = 1; }
-      else { result.status = 'failed'; result.error = String(task.stderr || task.stdout || '任务失败').trim().slice(0, 500); store.status = 'failed'; store.error = `${type} 范围导出失败：${result.error}`; }
+      else { result.status = 'failed'; result.error = stageFailure(task, STAGE_LABEL[type], timeoutMs); store.status = 'failed'; store.error = `${STAGE_LABEL[type]}范围导出失败：${result.error}`; }
       writeState(statePath, state);
     }
     if (store.status !== 'failed') store.status = 'completed'; else failures += 1;

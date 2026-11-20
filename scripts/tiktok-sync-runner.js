@@ -11,6 +11,7 @@ const promotionJobPath = path.join(scriptDirectory, 'tiktok-promotion-job.js');
 const sellerLoginPath = path.join(scriptDirectory, 'tiktok-seller-auto-login.js');
 const closeSessionPath = path.join(scriptDirectory, 'tiktok-browser-session-close.js');
 const checkOnly = process.argv.includes('--check');
+const STAGE_TIMEOUT_MS = { order: 12 * 60 * 1000, settledBill: 20 * 60 * 1000, unsettledBill: 20 * 60 * 1000, promotion: 12 * 60 * 1000 };
 function initialOrderUrl(config, store) { return `${String(config.sellerCenterUrl).replace(/\/$/, '')}/order?shop_region=${encodeURIComponent(store.countryCode)}&tab=all`; }
 function waitSync(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
 function runStoreLogin(config, store) {
@@ -46,6 +47,10 @@ function writeState(filePath, value) {
   value.pid = process.pid;
   value.heartbeatAt = new Date().toISOString();
   writeJson(filePath, value);
+}
+function stageFailure(result, label, timeoutMs) {
+  if (result?.error?.code === 'ETIMEDOUT' || result?.signal) return `${label}超过 ${Math.round(timeoutMs / 60000)} 分钟仍未完成，已停止该步骤并将关闭专用浏览器。`;
+  return String(result?.stderr || result?.stdout || `${label}任务未返回结果`).trim();
 }
 function cancellationRequested(rootDir) {
   return fs.existsSync(path.join(rootDir, '待处理', '同步助手取消请求.json'));
@@ -120,11 +125,14 @@ function main() {
     const isSettled = sourceType === 'settled';
     const field = isSettled ? 'settledBill' : 'unsettledBill';
     const label = isSettled ? '已结算账单' : '未结算账单';
+    const timeoutMs = isSettled ? STAGE_TIMEOUT_MS.settledBill : STAGE_TIMEOUT_MS.unsettledBill;
+    store.currentStage = { type: field, label, startedAt: new Date().toISOString(), timeoutAt: new Date(Date.now() + timeoutMs).toISOString(), retry };
     state.message = retry
       ? `${checkOnly ? '正在复检' : '正在重试'}${label}：${store.store}`
-      : `${checkOnly ? '正在检测' : '正在同步'}${label}：${store.store}`;
+      : `${checkOnly ? '正在检测' : '正在同步'}${label}：${store.store}（最长 ${Math.round(timeoutMs / 60000)} 分钟）`;
     writeState(statePath, state);
-    const result = spawnSync(process.execPath, [unsettledBillJobPath, '--store', store.profileKey, '--date', targetDate, ...(isSettled ? ['--source', 'settled'] : []), ...(checkOnly ? ['--dry-run'] : [])], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [unsettledBillJobPath, '--store', store.profileKey, '--date', targetDate, ...(isSettled ? ['--source', 'settled'] : []), ...(checkOnly ? ['--dry-run'] : [])], { encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGTERM' });
+    delete store.currentStage;
     const run = isSettled
       ? latestSettledBillRun(config.rootDir, store.profileKey, targetDate)
       : latestUnsettledBillRun(config.rootDir, store.profileKey, targetDate);
@@ -132,7 +140,7 @@ function main() {
     store[field] = {
       status: run?.status || (result.status === 0 ? 'completed' : 'failed'),
       batchCode: run?.batchCode ?? null,
-      error: run?.error || (result.status === 0 ? null : String(result.stderr || result.stdout || `${label}任务未返回结果`).trim()),
+      error: run?.error || (result.status === 0 ? null : stageFailure(result, label, timeoutMs)),
       preview: run?.preview ?? null,
       attempts: Number(previous.attempts || 0) + 1,
       retried: retry
@@ -145,7 +153,8 @@ function main() {
   try { for (const store of state.stores) {
     if (cancellationRequested(config.rootDir)) { state.status = 'cancelled'; state.message = '已收到取消请求，未启动后续店铺。'; break; }
     store.status = 'running'; store.startedAt = new Date().toISOString();
-    state.message = `${checkOnly ? '正在检测' : '正在同步'}：${store.store}（检查登录）`;
+    store.currentStage = { type: 'login', label: '登录检查', startedAt: new Date().toISOString(), manualVerification: true };
+    state.message = `${checkOnly ? '正在检测' : '正在同步'}：${store.store}（检查登录；如出现验证码，请完成验证后保持页面打开）`;
     writeState(statePath, state);
     // First reuse the isolated Chrome session.  If TikTok has expired it, the
     // helper decrypts this store's locally protected credential just long
@@ -154,6 +163,7 @@ function main() {
     // not leave a newly opened Chrome instance behind either.
     sessionKeys.add(store.profileKey || 'default');
     const loginResult = runStoreLogin(config, store);
+    delete store.currentStage;
     store.login = {
       status: loginResult.status === 0 ? 'completed' : 'failed',
       error: loginResult.status === 0 ? null : String(loginResult.stderr || loginResult.stdout || '自动登录未返回结果').trim()
@@ -167,11 +177,14 @@ function main() {
       sessionKeys.delete(store.profileKey || 'default');
       continue;
     }
-    state.message = `${checkOnly ? '正在检测' : '正在同步'}：${store.store}`;
+    const orderTimeoutMs = STAGE_TIMEOUT_MS.order;
+    store.currentStage = { type: 'order', label: '订单', startedAt: new Date().toISOString(), timeoutAt: new Date(Date.now() + orderTimeoutMs).toISOString() };
+    state.message = `${checkOnly ? '正在检测订单' : '正在同步订单'}：${store.store}（最长 ${Math.round(orderTimeoutMs / 60000)} 分钟）`;
     writeState(statePath, state);
-    const result = spawnSync(process.execPath, [jobPath, '--store', store.profileKey, '--date', targetDate, ...(checkOnly ? ['--dry-run'] : [])], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [jobPath, '--store', store.profileKey, '--date', targetDate, ...(checkOnly ? ['--dry-run'] : [])], { encoding: 'utf8', timeout: orderTimeoutMs, killSignal: 'SIGTERM' });
+    delete store.currentStage;
     const run = latestStoreRun(config.rootDir, store.profileKey, targetDate);
-    store.order = { status: run?.status || (result.status === 0 ? 'completed' : 'failed'), batchCode: run?.batchCode ?? null, error: run?.error || (result.status === 0 ? null : String(result.stderr || result.stdout || '订单任务未返回结果').trim()) };
+    store.order = { status: run?.status || (result.status === 0 ? 'completed' : 'failed'), batchCode: run?.batchCode ?? null, error: run?.error || (result.status === 0 ? null : stageFailure(result, '订单', orderTimeoutMs)) };
     store.orderCount = run?.orderCount ?? null; store.batchCode = run?.batchCode ?? null;
     const settledEnabled = Number(config.syncRules?.settledBills || 0) >= 1;
     const unsettledEnabled = Number(config.syncRules?.unsettledBills || 0) >= 1;
@@ -188,10 +201,13 @@ function main() {
       // 推广日报来自独立的“店铺广告”数据源。账单平台延迟生成报表时，
       // 不能阻断已经校验通过的推广费同步；账单失败仍会保留在店铺状态中。
       if (promotionsEnabled && store.order.status !== 'failed') {
-        state.message = `${checkOnly ? '正在检测推广日报' : '正在同步推广费'}：${store.store}`; writeState(statePath, state);
-        const promotionResult = spawnSync(process.execPath, [promotionJobPath, '--store', store.profileKey, '--date', targetDate, ...(checkOnly ? ['--dry-run'] : [])], { encoding: 'utf8' });
+        const promotionTimeoutMs = STAGE_TIMEOUT_MS.promotion;
+        store.currentStage = { type: 'promotion', label: '推广', startedAt: new Date().toISOString(), timeoutAt: new Date(Date.now() + promotionTimeoutMs).toISOString() };
+        state.message = `${checkOnly ? '正在检测推广日报' : '正在同步推广费'}：${store.store}（最长 ${Math.round(promotionTimeoutMs / 60000)} 分钟）`; writeState(statePath, state);
+        const promotionResult = spawnSync(process.execPath, [promotionJobPath, '--store', store.profileKey, '--date', targetDate, ...(checkOnly ? ['--dry-run'] : [])], { encoding: 'utf8', timeout: promotionTimeoutMs, killSignal: 'SIGTERM' });
+        delete store.currentStage;
         const promotionRun = latestPromotionRun(config.rootDir, store.profileKey, targetDate);
-        store.promotion = { status: promotionRun?.status || (promotionResult.status === 0 ? 'completed' : 'failed'), batchCode: promotionRun?.batchCode ?? null, error: promotionRun?.error || (promotionResult.status === 0 ? null : String(promotionResult.stderr || promotionResult.stdout || '推广费任务未返回结果').trim()), preview: promotionRun?.preview ?? null };
+        store.promotion = { status: promotionRun?.status || (promotionResult.status === 0 ? 'completed' : 'failed'), batchCode: promotionRun?.batchCode ?? null, error: promotionRun?.error || (promotionResult.status === 0 ? null : stageFailure(promotionResult, '推广', promotionTimeoutMs)), preview: promotionRun?.preview ?? null };
         if (store.promotion.status === 'failed') { store.error = store.promotion.error; }
       }
     }

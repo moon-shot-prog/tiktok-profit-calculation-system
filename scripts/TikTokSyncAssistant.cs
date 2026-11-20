@@ -369,6 +369,21 @@ namespace TikTokSyncAssistant
                     var name = store.ContainsKey("store") ? Convert.ToString(store["store"]) : "店铺";
                     var storeStatus = store.ContainsKey("status") ? Convert.ToString(store["status"]) : "等待";
                     var detail = store.ContainsKey("unsettledBillBatchCode") && store["unsettledBillBatchCode"] != null ? "订单 " + (store.ContainsKey("batchCode") && store["batchCode"] != null ? Convert.ToString(store["batchCode"]) : "无新增") + "；未结算 " + Convert.ToString(store["unsettledBillBatchCode"]) : (store.ContainsKey("batchCode") && store["batchCode"] != null ? "订单批次 " + Convert.ToString(store["batchCode"]) : (store.ContainsKey("error") && store["error"] != null ? Convert.ToString(store["error"]).Split('\n')[0] : ""));
+                    object currentStageRaw;
+                    var currentStage = store.TryGetValue("currentStage", out currentStageRaw) ? currentStageRaw as Dictionary<string, object> : null;
+                    if (currentStage != null)
+                    {
+                        var label = ResultValue(currentStage, "label", "任务");
+                        var started = ResultValue(currentStage, "startedAt", "");
+                        var elapsed = "";
+                        DateTime startedAt;
+                        if (DateTime.TryParse(started, null, DateTimeStyles.RoundtripKind, out startedAt))
+                        {
+                            var duration = DateTime.UtcNow - startedAt.ToUniversalTime();
+                            elapsed = "，已运行 " + Math.Max(0, (int)duration.TotalMinutes) + " 分钟";
+                        }
+                        detail = "正在" + label + elapsed + (String.IsNullOrWhiteSpace(detail) ? "" : "；" + detail);
+                    }
                     var promotion = store.ContainsKey("promotion") ? store["promotion"] as Dictionary<string, object> : null;
                     if (promotion != null) detail += (String.IsNullOrWhiteSpace(detail) ? "" : "；") + "推广 " + (promotion.ContainsKey("batchCode") && promotion["batchCode"] != null ? Convert.ToString(promotion["batchCode"]) : (promotion.ContainsKey("status") ? Convert.ToString(promotion["status"]) : "等待"));
                     results.Add(name + "：" + storeStatus + (String.IsNullOrWhiteSpace(detail) ? "" : "（" + detail + "）"));
@@ -429,6 +444,9 @@ namespace TikTokSyncAssistant
                     if (store == null) continue;
                     text.AppendLine();
                     text.AppendLine("【" + ResultValue(store, "store", "店铺") + " · " + ResultValue(store, "countryCode", "—") + "】 " + ResultValue(store, "status", "未知"));
+                    object currentStageRaw;
+                    var currentStage = store.TryGetValue("currentStage", out currentStageRaw) ? currentStageRaw as Dictionary<string, object> : null;
+                    if (currentStage != null) text.AppendLine("  当前步骤：" + ResultValue(currentStage, "label", "任务") + "（开始于 " + ResultValue(currentStage, "startedAt", "—") + "）");
                     AppendStageResult(text, store, "login", "自动登录");
                     AppendStageResult(text, store, "order", "订单");
                     AppendStageResult(text, store, "settledBill", "已结算账单");

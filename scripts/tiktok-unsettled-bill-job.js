@@ -278,6 +278,19 @@ async function openSettledRangePicker(page, exportPanel) {
     await sleep(250);
     return;
   }
+  // Some regional Seller Center variants render the field as an aria button
+  // (or a plain div) and do not include the literal full placeholder.  Check
+  // these accessible variants before falling back to text-node clicks.
+  const accessibleTriggers = exportPanel.locator('[role="button"], button, [aria-haspopup="dialog"], [aria-haspopup="true"]');
+  for (let index = 0; index < await accessibleTriggers.count(); index += 1) {
+    const trigger = accessibleTriggers.nth(index);
+    if (!await trigger.isVisible().catch(() => false)) continue;
+    const hint = `${await trigger.getAttribute('aria-label').catch(() => '') || ''} ${await trigger.getAttribute('placeholder').catch(() => '') || ''} ${await trigger.innerText().catch(() => '') || ''}`;
+    if (!/(开始时间|结束时间|日期范围|选择日期|date range)/i.test(hint)) continue;
+    await trigger.click({ force: true });
+    await sleep(350);
+    return;
+  }
   // Prefer the real range-field container over its child label.  On a fresh
   // dialog render, clicking only the text may not open the calendar.
   const knownTrigger = exportPanel.locator('div.sc-idvBfp.jjBdyS').filter({ hasText: '开始时间' }).first();
@@ -290,7 +303,42 @@ async function openSettledRangePicker(page, exportPanel) {
   if (await clickFirstVisible(rangeText)) { await sleep(250); return; }
   const genericRange = page.getByText(/开始时间\s*-\s*结束时间/, { exact: false });
   if (await clickFirstVisible(genericRange)) { await sleep(250); return; }
-  throw new Error('已结算账单导出窗口未找到“开始时间 - 结束时间”日期范围控件');
+  // Last fallback: TikTok sometimes translates the placeholder or splits it
+  // over nested spans.  Find a visible label containing either endpoint and
+  // click its nearest clickable/container ancestor.
+  const endpointText = exportPanel.getByText(/开始时间|结束时间|选择日期|date range/i, { exact: false });
+  for (let index = 0; index < await endpointText.count(); index += 1) {
+    const label = endpointText.nth(index);
+    if (!await label.isVisible().catch(() => false)) continue;
+    const trigger = label.locator('xpath=ancestor-or-self::*[self::button or @role="button" or @tabindex or .//input][1]');
+    if (await trigger.count() && await trigger.first().isVisible().catch(() => false)) {
+      await trigger.first().click({ force: true });
+    } else {
+      await label.click({ force: true });
+    }
+    await sleep(350);
+    if (await page.getByText(/^\d{4}年-\d{1,2}月$/, { exact: true }).count().catch(() => 0)) return;
+  }
+  throw new Error('已结算账单导出窗口未找到可操作的日期范围控件（已尝试输入框、按钮、日期标签三种页面结构）');
+}
+async function settledExportPanel(page) {
+  const specific = page.locator('.p-popover-inner-content, [role="dialog"], .arco-modal-content, .arco-popover-content')
+    .filter({ hasText: /请选择导出的时间范围|开始时间\s*-\s*结束时间|开始时间|选择日期|date range/i });
+  for (let index = (await specific.count()) - 1; index >= 0; index -= 1) {
+    const panel = specific.nth(index);
+    if (await panel.isVisible().catch(() => false)) return panel;
+  }
+  // Never use the whole document unless the modal is genuinely unclassed;
+  // this retains compatibility with regional A/B layouts without touching the
+  // finance page's background filters.
+  const overlays = page.locator('[role="dialog"], .arco-modal, .arco-popover, .p-popover');
+  for (let index = (await overlays.count()) - 1; index >= 0; index -= 1) {
+    const panel = overlays.nth(index);
+    if (!await panel.isVisible().catch(() => false)) continue;
+    const text = await panel.innerText().catch(() => '');
+    if (/导出|export/i.test(text)) return panel;
+  }
+  throw new Error('已结算账单导出窗口未显示；请确认页面未被登录验证或提示弹窗遮挡');
 }
 async function selectDateAndExport(page, startDate, endDate = startDate, sourceType = 'unsettled') {
   await clickText(page, '导出');
@@ -298,7 +346,7 @@ async function selectDateAndExport(page, startDate, endDate = startDate, sourceT
   // 已结算与未结算的新版弹窗都是同一个日期范围控件。不要填写弹窗中
   // 任意两个 input：其中可能混有搜索框或主页面筛选控件，会让 TikTok
   // 生成默认当天的报表。统一通过日历选择开始、结束日期。
-  const exportPanel = page.locator('.p-popover-inner-content, [role="dialog"]').filter({ hasText: /请选择导出的时间范围|开始时间\s*-\s*结束时间/ }).last();
+  const exportPanel = await settledExportPanel(page);
   await openSettledRangePicker(page, exportPanel);
   await showSettlementCalendarMonth(page, startDate);
   await pickVisibleCalendarDay(page, startDate, false);
@@ -427,13 +475,18 @@ function downloadSnapshot(directory) {
 }
 async function waitForBrowserDownload(directory, before, timeoutMs) {
   const until = Date.now() + timeoutMs;
+  const observed = new Map();
   while (Date.now() < until) {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       if (!entry.isFile() || /\.(crdownload|tmp)$/i.test(entry.name)) continue;
       const file = path.join(directory, entry.name);
       const stat = fs.statSync(file);
       if (stat.size <= 0 || before.has(`${entry.name}|${stat.size}|${stat.mtimeMs}`)) continue;
-      return file;
+      // A response acknowledgement can precede Chromium flushing the file.
+      // Accept it only after the size has remained unchanged for two polls.
+      const prior = observed.get(file);
+      if (prior && prior.size === stat.size && prior.mtimeMs === stat.mtimeMs && Date.now() - prior.firstSeenAt >= 900) return file;
+      observed.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, firstSeenAt: prior?.firstSeenAt || Date.now() });
     }
     await sleep(500);
   }
@@ -526,7 +579,15 @@ async function downloadFile(page, downloadsPath, report) {
       return targetPath;
     } catch (error) {
       lastError = error;
-      if (attempt < REPORT_DOWNLOAD_ATTEMPTS) await sleep(2000 * attempt);
+      if (attempt < REPORT_DOWNLOAD_ATTEMPTS) {
+        // Acknowledged downloads occasionally appear only after the history
+        // popover is reopened.  Re-resolve the button on the next pass rather
+        // than repeatedly clicking a stale DOM handle.
+        await page.keyboard.press('Escape').catch(() => {});
+        await sleep(1200 * attempt);
+        await clickText(page, '导出历史记录', false).catch(() => {});
+        await sleep(800);
+      }
     }
   }
   throw new Error(`账单下载连续 ${REPORT_DOWNLOAD_ATTEMPTS} 次失败：${lastError?.message || '未知错误'}`);
