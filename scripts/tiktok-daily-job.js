@@ -183,6 +183,29 @@ async function chooseCsvExportFormat(page) {
   }
   throw new Error('导出窗口中的 CSV 格式选项持续重载，未创建下载任务。');
 }
+async function confirmOrderExport(page) {
+  // Re-query on every attempt.  TikTok destroys and recreates this button as
+  // the range/format choice changes, so retaining any old Locator can wait on
+  // a detached node for the default 30 seconds.
+  const selectors = [
+    'button[data-log_click_for="export"]:visible:not([disabled])',
+    'button.p-btn-primary:visible:not([disabled])'
+  ];
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (const selector of selectors) {
+      const buttons = page.locator(selector).filter({ hasText: /^导出$/ });
+      const count = await buttons.count().catch(() => 0);
+      for (let index = count - 1; index >= 0; index -= 1) {
+        try {
+          await buttons.nth(index).click({ force: true, timeout: 5000 });
+          return;
+        } catch (_) { /* the dialog can redraw; obtain a new locator */ }
+      }
+    }
+    await sleep(350 * (attempt + 1));
+  }
+  throw new Error('未找到稳定的订单导出确认按钮，未创建下载任务。');
+}
 
 function readRunLog(rootDir) {
   const filePath = path.join(rootDir, '待处理', '自动任务记录.json');
@@ -419,34 +442,8 @@ async function main() {
     await page.waitForTimeout(800);
     await chooseFilteredOrderExportScope(page, orderCount);
     await chooseCsvExportFormat(page);
-    // The entry button and confirmation button share the text “导出”.  The
-    // confirmation button, however, has a stable analytics marker.  Prefer
-    // that marker so a re-rendered/hidden entry button cannot make the whole
-    // range run fail while checking its bounding box.
-    const markedButtons = page.locator('button[data-log_click_for="export"]');
-    let confirmButton = null;
-    for (let index = 0; index < await markedButtons.count(); index += 1) {
-      const candidate = markedButtons.nth(index);
-      if (await candidate.isVisible().catch(() => false) && !await candidate.isDisabled().catch(() => true)) { confirmButton = candidate; break; }
-    }
-    if (!confirmButton) {
-      const buttons = page.getByRole('button', { name: '导出', exact: true });
-      for (let index = 0; index < await buttons.count(); index += 1) {
-        const candidate = buttons.nth(index);
-        if (!await candidate.isVisible().catch(() => false) || await candidate.isDisabled().catch(() => true)) continue;
-        const size = await candidate.evaluate(node => ({ width: node.getBoundingClientRect().width, top: node.getBoundingClientRect().top }), { timeout: 1500 }).catch(() => null);
-        if (size && size.width > 200 && size.top > 100) { confirmButton = candidate; break; }
-      }
-    }
-    if (!confirmButton) throw new Error('未找到 CSV 导出确认按钮');
     const exportMarker = exportTimeMarker();
-    // Some Seller Center dialogs are rendered beneath a fixed viewport layer.
-    // Ensure the actual modal button is in view, then use DOM click only as a
-    // fallback; otherwise Playwright reports “outside of the viewport” and no
-    // export task is created.
-    await confirmButton.scrollIntoViewIfNeeded().catch(() => {});
-    try { await confirmButton.click({ force: true, timeout: 10000 }); }
-    catch (_) { await confirmButton.evaluate(node => node.click()); }
+    await confirmOrderExport(page);
     // The marker is captured before the request: a later history entry cannot
     // cause the downloader to fall back to an earlier exported report.
     const { download: downloadButton } = await waitForThisExportDownload(page, exportMarker);
