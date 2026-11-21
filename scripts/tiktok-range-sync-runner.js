@@ -8,7 +8,7 @@ const configPath = path.join(dir, 'tiktok-automation.config.json');
 const loginPath = path.join(dir, 'tiktok-seller-auto-login.js');
 const closeSessionPath = path.join(dir, 'tiktok-browser-session-close.js');
 const jobs = { orders: path.join(dir, 'tiktok-daily-job.js'), settledBills: path.join(dir, 'tiktok-unsettled-bill-job.js'), unsettledBills: path.join(dir, 'tiktok-unsettled-bill-job.js'), promotions: path.join(dir, 'tiktok-promotion-job.js') };
-const STAGE_TIMEOUT_MS = { orders: 12 * 60 * 1000, settledBills: 20 * 60 * 1000, unsettledBills: 20 * 60 * 1000, promotions: 12 * 60 * 1000 };
+const STAGE_TIMEOUT_MS = { orders: 25 * 60 * 1000, settledBills: 20 * 60 * 1000, unsettledBills: 20 * 60 * 1000, promotions: 12 * 60 * 1000 };
 const STAGE_LABEL = { orders: '订单', settledBills: '已结算账单', unsettledBills: '未结算账单', promotions: '推广' };
 function initialTargetUrl(config, store, type) {
   const base = String(config.sellerCenterUrl).replace(/\/$/, '');

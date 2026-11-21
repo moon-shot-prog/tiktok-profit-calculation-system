@@ -281,7 +281,8 @@ async function main() {
     record.status = 'failed'; record.error = error.message || String(error); console.error(record.error); process.exitCode = 1;
   } finally {
     record.completedAt = new Date().toISOString(); runLog.runs = [record, ...(runLog.runs || [])].slice(0, 90); writeJson(logPath, runLog);
-    try { await native.browser.close(); } catch (_) { /* no-op */ }
+    // Detach only; this Chrome session belongs to the store-level runner.
+    try { native.browser._connection?.close(); } catch (_) { /* no-op */ }
     if (!native.reused) try { native.chromeProcess.kill(); } catch (_) { /* no-op */ }
   }
 }

@@ -749,7 +749,9 @@ async function main() {
   } finally {
     record.completedAt = new Date().toISOString();
     runLog.runs = [record, ...(runLog.runs || [])].slice(0, 90); writeJson(logPath, runLog);
-    try { await native.browser.close(); } catch (_) { /* no-op */ }
+    // This CDP browser belongs to the range runner. Detach without terminating
+    // the shared Chrome process so the next data type can reuse the login.
+    try { native.browser._connection?.close(); } catch (_) { /* no-op */ }
     if (!native.reused) try { native.process.kill(); } catch (_) { /* no-op */ }
   }
 }

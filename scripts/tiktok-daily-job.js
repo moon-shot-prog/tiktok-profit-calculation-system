@@ -20,7 +20,9 @@ const configuredSystemUrl = (() => {
   try { return JSON.parse(fs.readFileSync(configPath, 'utf8')).systemUrl; } catch (_) { return null; }
 })();
 const systemUrl = String(process.env.LOCAL_SYSTEM_URL || configuredSystemUrl || 'http://127.0.0.1:3000').replace(/\/$/, '');
-const ORDER_EXPORT_WAIT_SECONDS = 300;
+// Historical exports are queued by TikTok. A 31-day report can legitimately
+// take longer than five minutes, so retain the task until the report is ready.
+const ORDER_EXPORT_WAIT_SECONDS = 900;
 
 function readConfig() {
   if (!fs.existsSync(configPath)) throw new Error('未找到本机自动化配置，请先完成店铺映射');
@@ -521,7 +523,9 @@ async function main() {
     if (!record.completedAt) record.completedAt = new Date().toISOString();
     runLog.runs = [record, ...(runLog.runs || [])].slice(0, 90);
     writeRunLog(logPath, runLog);
-    try { await browser.close(); } catch (_) { /* Disconnect from the native Chrome session. */ }
+    // The browser is attached through CDP and is owned by the store-level
+    // runner. Detach only; closing it would kill the session needed by bills.
+    try { browser._connection?.close(); } catch (_) { /* no-op */ }
     if (!native.reused) try { native.chromeProcess.kill(); } catch (_) { /* The native Chrome process may already be closed. */ }
   }
 }

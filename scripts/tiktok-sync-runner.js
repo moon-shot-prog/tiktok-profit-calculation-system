@@ -11,7 +11,7 @@ const promotionJobPath = path.join(scriptDirectory, 'tiktok-promotion-job.js');
 const sellerLoginPath = path.join(scriptDirectory, 'tiktok-seller-auto-login.js');
 const closeSessionPath = path.join(scriptDirectory, 'tiktok-browser-session-close.js');
 const checkOnly = process.argv.includes('--check');
-const STAGE_TIMEOUT_MS = { order: 12 * 60 * 1000, settledBill: 20 * 60 * 1000, unsettledBill: 20 * 60 * 1000, promotion: 12 * 60 * 1000 };
+const STAGE_TIMEOUT_MS = { order: 25 * 60 * 1000, settledBill: 20 * 60 * 1000, unsettledBill: 20 * 60 * 1000, promotion: 12 * 60 * 1000 };
 function initialOrderUrl(config, store) { return `${String(config.sellerCenterUrl).replace(/\/$/, '')}/order?shop_region=${encodeURIComponent(store.countryCode)}&tab=all`; }
 function waitSync(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
 function runStoreLogin(config, store) {
