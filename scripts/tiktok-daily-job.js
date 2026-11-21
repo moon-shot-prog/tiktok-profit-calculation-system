@@ -344,6 +344,25 @@ function exportTimeMarker() {
   return `${date.year}-${date.month}-${date.day}-${fields.hour}:${fields.minute}`;
 }
 
+async function openOrderExportHistory(page) {
+  // TikTok uses the same "导出" entry for creating a report and for opening
+  // the export-history popover. After the report is queued, reopen it before
+  // looking for the download action.
+  const entries = page.locator('button[data-log_click_for="export_entry"]:visible:not([disabled])');
+  const count = await entries.count();
+  for (let index = 0; index < count; index += 1) {
+    const entry = entries.nth(index);
+    try {
+      await entry.scrollIntoViewIfNeeded();
+      await entry.click({ force: true, timeout: 5000 });
+      return true;
+    } catch (_) {
+      // A transient overlay can intercept a click; try another visible entry.
+    }
+  }
+  return false;
+}
+
 async function waitForThisExportDownload(page, marker = exportTimeMarker()) {
   const reportName = page.getByText(new RegExp(`订单\\s*-${marker.replace(':', '[:：]')}`, 'i'));
   for (let attempt = 1; attempt <= ORDER_EXPORT_WAIT_SECONDS; attempt += 1) {
@@ -353,6 +372,11 @@ async function waitForThisExportDownload(page, marker = exportTimeMarker()) {
       const row = reportName.first().locator('xpath=ancestor::*[.//button][1]');
       const download = row.getByRole('button', { name: '下载', exact: true });
       if (await download.count()) return { download: download.first(), marker };
+    }
+    // A report can be ready while its history panel is closed. Reopen it
+    // automatically instead of waiting for the user to click “导出”.
+    if (attempt === 1 || attempt % 8 === 0) {
+      await openOrderExportHistory(page);
     }
     await sleep(1000);
   }
