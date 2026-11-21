@@ -60,11 +60,12 @@ function utcDaysAgo(daysAgo) {
   return calendarDay.toISOString().slice(0, 10);
 }
 
-function utcRange(startDate, endDate = startDate) {
-  // Range tasks are defined by UTC calendar dates.  Do not use Thailand's
-  // timezone here: doing so leaks the following local day for MY/PH stores.
-  const start = new Date(`${startDate}T00:00:00.000Z`).getTime();
-  const end = new Date(`${endDate}T23:59:59.999Z`).getTime();
+function storefrontRange(startDate, endDate = startDate, countryCode) {
+  // TikTok's filter is shown in the storefront's calendar. Supplying UTC
+  // midnight makes a TH/VN report include the following local morning.
+  const offset = storefrontUtcOffset(countryCode);
+  const start = new Date(`${startDate}T00:00:00.000${offset}`).getTime();
+  const end = new Date(`${endDate}T23:59:59.999${offset}`).getTime();
   return { start, end };
 }
 
@@ -117,9 +118,10 @@ function normalizedOrderDate(value, countryCode) {
       day = first; month = secondValue;
     }
   }
-  const timestamp = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}${storefrontUtcOffset(countryCode)}`);
-  if (Number.isNaN(timestamp.getTime())) return null;
-  return timestamp.toISOString().slice(0, 10);
+  // Created Time is already expressed in the shop's local time. Compare its
+  // displayed calendar date; converting it to UTC masks a cross-day leak.
+  if (!Number.isInteger(Number(year)) || !Number.isInteger(Number(month)) || !Number.isInteger(Number(day))) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function verifyExportDate(rows, startDate, endDate = startDate, countryCode) {
@@ -476,7 +478,7 @@ async function main() {
   const startedAt = new Date().toISOString();
   const record = { key: runKey, date: targetDate, endDate, startedAt, status: 'running' };
   try {
-    const { start, end } = utcRange(targetDate, endDate);
+    const { start, end } = storefrontRange(targetDate, endDate, mapping.countryCode);
     await gotoWithRetry(page, `${config.sellerCenterUrl.replace(/\/$/, '')}/order?shop_region=${encodeURIComponent(mapping.countryCode)}&tab=all&time_order_created[]=${start}&time_order_created[]=${end}`, '订单');
     await page.waitForTimeout(6000);
     const sellerText = await page.locator('body').innerText();
