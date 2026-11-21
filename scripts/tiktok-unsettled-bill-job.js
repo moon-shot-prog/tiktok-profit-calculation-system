@@ -75,7 +75,6 @@ async function openBrowser(chromium, profilePath, profileKey) {
     }
   } catch (_) { /* No reusable session is listening yet. */ }
   const process = spawn(findChrome(), [`--user-data-dir=${profilePath}`, `--remote-debugging-port=${port}`, '--remote-allow-origins=*', '--no-first-run', '--disable-popup-blocking', 'about:blank'], { windowsHide: true, detached: true, stdio: 'ignore' });
-  process.unref();
   for (let retry = 0; retry < 30; retry += 1) {
     try { if ((await fetch(`http://127.0.0.1:${port}/json/version`)).ok) return { browser: await chromium.connectOverCDP(`http://127.0.0.1:${port}`), process, reused: false }; } catch (_) { /* starting */ }
     await sleep(1000);

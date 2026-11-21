@@ -258,7 +258,6 @@ async function connectNativeChrome(chromium, profilePath, profileKey) {
     '--disable-popup-blocking',
     'about:blank'
   ], { windowsHide: true, detached: true, stdio: 'ignore' });
-  chromeProcess.unref();
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/version`);
