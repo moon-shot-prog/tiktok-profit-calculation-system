@@ -359,6 +359,31 @@ async function waitForThisExportDownload(page, marker = exportTimeMarker()) {
   throw new Error(`本次导出任务（${marker}）未在 ${ORDER_EXPORT_WAIT_SECONDS} 秒内生成可下载文件，未使用任何历史文件。TikTok 可能仍在生成报表，请稍后重新发起范围同步。`);
 }
 
+async function clickThisExportDownload(page, marker) {
+  const pattern = new RegExp(`订单\\s*-${String(marker).replace(':', '[:：]')}`, 'i');
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const reports = page.getByText(pattern);
+    const count = await reports.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const report = reports.nth(index);
+      if (!await report.isVisible().catch(() => false)) continue;
+      const row = report.locator('xpath=ancestor::*[.//button][1]');
+      const button = row.getByRole('button', { name: '下载', exact: true }).first();
+      if (!await button.isVisible().catch(() => false)) continue;
+      try {
+        await button.scrollIntoViewIfNeeded();
+        await button.click({ force: true, timeout: 8000 });
+        return;
+      } catch (_) {
+        // The export-history panel may rerender while being scrolled.  Refind
+        // the report row instead of retaining this button locator.
+      }
+    }
+    await sleep(500 * (attempt + 1));
+  }
+  throw new Error(`本次导出任务（${marker}）的下载按钮无法进入可点击区域`);
+}
+
 async function resolveSystemShop(mapping, config) {
   const systemSession = await resolveSystemSession(config);
   const accessToken = systemSession.accessToken;
@@ -461,7 +486,7 @@ async function main() {
     await confirmOrderExport(page);
     // The marker is captured before the request: a later history entry cannot
     // cause the downloader to fall back to an earlier exported report.
-    const { download: downloadButton } = await waitForThisExportDownload(page, exportMarker);
+    await waitForThisExportDownload(page, exportMarker);
     record.exportMarker = exportMarker;
     // TikTok can reuse a report filename. Chrome then replaces the existing
     // file instead of creating a new name, so track its metadata as well.
@@ -471,7 +496,7 @@ async function main() {
       catch (_) { return [file, null]; }
     }));
     const downloadStartedAt = Date.now();
-    await downloadButton.click({ force: true });
+    await clickThisExportDownload(page, exportMarker);
     let outputPath = null;
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const completedFiles = fs.readdirSync(downloadsPath)
